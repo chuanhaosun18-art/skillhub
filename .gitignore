@@ -1,0 +1,19 @@
+# 依赖与构建产物
+node_modules/
+dist/
+*.exe
+*.exe~
+*.db
+
+# 本地数据（后端运行期数据在 D:\skillhub-data 或 SKILLHUB_DATA 指定）
+data/
+files/
+archives/
+
+# 环境与编辑器
+*.local
+.env
+.DS_Store
+.vscode/*
+!.vscode/extensions.json
+.idea
