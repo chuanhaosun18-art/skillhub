@@ -999,10 +999,15 @@ func selfInstallCheck(files []generatedFile) (bool, string) {
 	return true, ""
 }
 
-// corpusFor 取该 intent 下的真实用户原话，作为可发现性测试用例
+// corpusFor 取该 intent 下的真实用户原话，作为可发现性测试用例。
+// task_intent 为空时返回空：空 intent 在语料库里是无关杂料（论文/考研等演示数据），
+// 绝不能当成本 skill 的测试输入，否则会出现「保研 skill 拿论文选题测召回」的误判。
 func corpusFor(skillID int64, limit int) []string {
 	var intent string
 	db.QueryRow(`SELECT COALESCE(task_intent,'') FROM skills WHERE id = ?`, skillID).Scan(&intent)
+	if strings.TrimSpace(intent) == "" {
+		return nil
+	}
 	rows, err := db.Query(`SELECT utterance FROM description_corpus
 		WHERE task_intent = ? ORDER BY id LIMIT ?`, intent, limit)
 	if err != nil {

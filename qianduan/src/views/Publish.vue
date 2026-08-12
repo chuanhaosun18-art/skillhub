@@ -66,6 +66,68 @@ const form = reactive({
   version: '1.0.0',
 })
 
+// ===== 测试契约（评测平台四问：可发现/完成/稳定/边界）=====
+const skillTypes = ['经验型', '产出型']
+const runtimeOptions = [
+  { value: 'model', label: '模型推理（纯 LLM，无需装环境）' },
+  { value: 'script', label: '脚本执行（容器内跑代码，需填环境依赖）' },
+]
+const contract = reactive({
+  skill_type: '经验型',
+  trigger_description: '',
+  completion_definition: '',
+  robustness_examples: [],
+  boundary_statement: '',
+  process_checklist: [],
+  dangerous_patterns: [],
+})
+const env = reactive({
+  runtime: 'model',
+  language: 'python',
+  language_version: '',
+  dependencies: [],
+  requirements_txt: '',
+  start_command: '',
+  base_image: '',
+  memory_mb: 512,
+  gpu: false,
+  timeout_s: 60,
+})
+
+const languageOptions = [
+  { value: 'python', label: 'Python' },
+  { value: 'node', label: 'Node.js' },
+  { value: 'go', label: 'Go' },
+  { value: 'bash', label: 'Shell / Bash' },
+]
+
+function contractJSON() {
+  return JSON.stringify({
+    skill_type: contract.skill_type,
+    trigger_description: contract.trigger_description.trim(),
+    completion_definition: contract.completion_definition.trim(),
+    robustness_examples: JSON.stringify(contract.robustness_examples),
+    boundary_statement: contract.boundary_statement.trim(),
+    process_checklist: JSON.stringify(contract.process_checklist),
+    dangerous_patterns: JSON.stringify(contract.dangerous_patterns),
+  })
+}
+
+function envJSON() {
+  return JSON.stringify({
+    runtime: env.runtime,
+    language: env.language,
+    language_version: env.language_version.trim(),
+    dependencies: env.dependencies,
+    requirements_txt: env.requirements_txt,
+    start_command: env.start_command.trim(),
+    base_image: env.base_image.trim(),
+    memory_mb: Number(env.memory_mb) || 512,
+    gpu: !!env.gpu,
+    timeout_s: Number(env.timeout_s) || 60,
+  })
+}
+
 const categories = [
   '论文写作',
   '编程开发',
@@ -110,14 +172,16 @@ async function handlePublish() {
   fd.append('category', form.category)
   fd.append('tags', JSON.stringify(form.tags))
   fd.append('version', form.version.trim() || '1.0.0')
+  fd.append('contract', contractJSON())
+  fd.append('env', envJSON())
   if (archiveFile.value) fd.append('archive', archiveFile.value)
   proofList.value.forEach((p) => fd.append('proof_images', p.raw))
 
   submitting.value = true
   try {
     const skill = await createSkill(fd)
-    ElMessage.success('技能发布成功，已上架市场')
-    router.push(`/skill/${skill.id}`)
+    ElMessage.success('已上传，进入四问测试门禁：测试通过后自动上架')
+    router.push({ path: '/gate', query: { skill: skill.id } })
   } catch (e) {
     ElMessage.error(e.message || '发布失败')
   } finally {
@@ -410,12 +474,14 @@ async function handlePublishGenerated() {
     fd.append('category', publishInfo.category)
     fd.append('tags', JSON.stringify(publishInfo.tags))
     fd.append('version', publishInfo.version.trim() || '1.0.0')
+    fd.append('contract', contractJSON())
+    fd.append('env', envJSON())
     fd.append('archive', zipFile)
     proofList.value.forEach((p) => fd.append('proof_images', p.raw))
 
     const skill = await createSkill(fd)
-    ElMessage.success('技能发布成功，已上架市场')
-    router.push(`/skill/${skill.id}`)
+    ElMessage.success('已上传，进入四问测试门禁：测试通过后自动上架')
+    router.push({ path: '/gate', query: { skill: skill.id } })
   } catch (e) {
     ElMessage.error(e.message || '发布失败')
   } finally {
@@ -551,6 +617,144 @@ function backToModeSelect() {
             </div>
             <div class="el-upload__tip">上传完成任务的成果截图、执行记录、结果对比等，用证据证明这个技能真的可用（将展示在搜索结果中）</div>
           </el-form-item>
+
+          <!-- 测试契约：驱动自动评测管道（四问：可发现/完成/稳定/边界） -->
+          <el-collapse class="eval-collapse">
+            <el-collapse-item title="🧪 测试契约（自动评测用，强烈建议填写）" name="contract">
+              <p class="eval-tip">
+                平台会按契约自动生成测试用例并跑评测管道：静态扫描 → 沙箱执行 → 评测 Agent → 报告。
+                不填写时平台按技能描述自动推断。
+              </p>
+              <el-form-item label="Skill 类型">
+                <el-radio-group v-model="contract.skill_type">
+                  <el-radio-button v-for="t in skillTypes" :key="t" :value="t">{{ t }}</el-radio-button>
+                </el-radio-group>
+              </el-form-item>
+              <el-form-item label="何时被唤起（trigger_description）">
+                <el-input
+                  v-model="contract.trigger_description"
+                  type="textarea"
+                  :rows="2"
+                  placeholder="如：用户询问保研定位、背景评估、院校推荐等"
+                />
+              </el-form-item>
+              <el-form-item label="做完的标准（completion_definition）">
+                <el-input
+                  v-model="contract.completion_definition"
+                  type="textarea"
+                  :rows="2"
+                  placeholder="如：输出包含冲刺/稳妥/保底三个梯度的定位报告，并附理由"
+                />
+              </el-form-item>
+              <el-form-item label="变体输入（robustness_examples，回车添加）">
+                <el-select
+                  v-model="contract.robustness_examples"
+                  multiple
+                  filterable
+                  allow-create
+                  default-first-option
+                  placeholder="如：我大三，想保研"
+                  style="width: 100%"
+                />
+              </el-form-item>
+              <el-form-item label="边界声明（boundary_statement）">
+                <el-input
+                  v-model="contract.boundary_statement"
+                  type="textarea"
+                  :rows="2"
+                  placeholder="如：不处理考研、出国咨询，不预测具体分数线，不提供违规操作建议"
+                />
+              </el-form-item>
+              <el-form-item v-if="contract.skill_type === '经验型'" label="过程检查表（process_checklist，回车添加）">
+                <el-select
+                  v-model="contract.process_checklist"
+                  multiple
+                  filterable
+                  allow-create
+                  default-first-option
+                  placeholder="如：三维背景采集"
+                  style="width: 100%"
+                />
+              </el-form-item>
+              <el-form-item label="危险模式（dangerous_patterns，命中即一票否决）">
+                <el-select
+                  v-model="contract.dangerous_patterns"
+                  multiple
+                  filterable
+                  allow-create
+                  default-first-option
+                  placeholder="如：保证录取、内部操作、修改成绩"
+                  style="width: 100%"
+                />
+              </el-form-item>
+            </el-collapse-item>
+
+            <el-collapse-item title="🖥️ 运行环境（测试时搭建沙箱用）" name="env">
+              <el-form-item label="运行方式">
+                <el-radio-group v-model="env.runtime">
+                  <el-radio-button v-for="o in runtimeOptions" :key="o.value" :value="o.value">{{ o.label }}</el-radio-button>
+                </el-radio-group>
+              </el-form-item>
+              <el-form-item v-if="env.runtime === 'script'" label="技术栈（语言）">
+                <el-select
+                  v-model="env.language"
+                  filterable
+                  allow-create
+                  default-first-option
+                  placeholder="选择或输入技术栈，如 python / node / go"
+                  style="width: 100%"
+                >
+                  <el-option v-for="o in languageOptions" :key="o.value" :label="o.label" :value="o.value" />
+                </el-select>
+                <div class="el-upload__tip">用于复现评测容器：平台按语言 + 版本自动选择基础镜像（如 python → python:3.11-slim）</div>
+              </el-form-item>
+              <el-form-item v-if="env.runtime === 'script'" label="语言版本">
+                <el-input v-model="env.language_version" placeholder="如：3.11 / 18 / 1.22（Python / Node / Go）" />
+              </el-form-item>
+              <el-form-item v-if="env.runtime === 'script'" label="Python 依赖包（回车添加）">
+                <el-select
+                  v-model="env.dependencies"
+                  multiple
+                  filterable
+                  allow-create
+                  default-first-option
+                  placeholder="如：requests、numpy"
+                  style="width: 100%"
+                />
+              </el-form-item>
+              <el-form-item v-if="env.runtime === 'script'" label="requirements.txt 内容">
+                <el-input
+                  v-model="env.requirements_txt"
+                  type="textarea"
+                  :rows="3"
+                  placeholder="也可直接把 requirements.txt 内容粘贴到这里"
+                />
+              </el-form-item>
+              <el-form-item v-if="env.runtime === 'script'" label="启动命令（start_command）">
+                <el-input v-model="env.start_command" placeholder="如：python server.py 或 node index.js" />
+              </el-form-item>
+              <el-form-item v-if="env.runtime === 'script'" label="基础镜像（可选，显式指定时优先于自动推断）">
+                <el-input v-model="env.base_image" placeholder="如：python:3.11-slim / node:18-slim / pytorch/pytorch:2.1.0-cuda12.1-cudnn8-runtime" />
+              </el-form-item>
+              <el-row :gutter="16">
+                <el-col :span="8">
+                  <el-form-item label="内存上限 (MB)">
+                    <el-input-number v-model="env.memory_mb" :min="128" :max="16384" :step="128" style="width: 100%" />
+                  </el-form-item>
+                </el-col>
+                <el-col :span="8">
+                  <el-form-item label="超时 (秒)">
+                    <el-input-number v-model="env.timeout_s" :min="5" :max="3600" :step="5" style="width: 100%" />
+                  </el-form-item>
+                </el-col>
+                <el-col :span="8">
+                  <el-form-item label="需要 GPU">
+                    <el-switch v-model="env.gpu" />
+                  </el-form-item>
+                </el-col>
+              </el-row>
+            </el-collapse-item>
+          </el-collapse>
 
           <el-button
             type="primary"
@@ -849,6 +1053,27 @@ function backToModeSelect() {
 .publish-btn {
   width: 100%;
   margin-top: 8px;
+}
+
+/* 测试契约 / 运行环境 */
+.eval-collapse {
+  margin-bottom: 16px;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.eval-collapse :deep(.el-collapse-item__content) {
+  padding: 8px 4px 16px;
+}
+
+.eval-tip {
+  font-size: 12px;
+  color: #909399;
+  line-height: 1.7;
+  background: #f5f7fa;
+  border-radius: 6px;
+  padding: 8px 12px;
+  margin-bottom: 12px;
 }
 
 /* 评估指标证明图片 */

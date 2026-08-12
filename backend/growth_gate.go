@@ -25,16 +25,65 @@ type evalCaseResult struct {
 }
 
 // seedEvalCases 生成四类测试用例并入库（在生成文件夹后调用）
+// 测试输入一律从 skill 自身内容（名称/目标/描述/关键判断/契约/执行轨迹）派生，
+// 绝不取全局语料里的无关句子——那会让「保研 skill 拿论文选题测召回」这种误判反复出现。
 func seedEvalCases(skillID, versionID int64, ver *SkillVersion, decisions []Decision, exec *Execution) {
 	db.Exec(`DELETE FROM skill_evals WHERE version_id = ?`, versionID)
+	contract, _ := loadContract(skillID)
 
-	// 可发现性：真实用户原话
-	for _, u := range corpusFor(skillID, 10) {
+	// ---------- 可发现性：用户会怎么问，来自 skill 自己 ----------
+	seededDisc := 0
+	addDisc := func(u string) {
+		if strings.TrimSpace(u) == "" {
+			return
+		}
 		db.Exec(`INSERT INTO skill_evals (skill_id, version_id, eval_type, input, expected) VALUES (?, ?, ?, ?, ?)`,
 			skillID, versionID, EvalDiscoverability, u, "该 Skill 出现在前 5 名")
+		seededDisc++
+	}
+	var nm string
+	db.QueryRow(`SELECT name FROM skills WHERE id = ?`, skillID).Scan(&nm)
+	nm = strings.TrimSpace(nm)
+	// 1) 直接搜名字：用户就该搜到它
+	if nm != "" {
+		addDisc(nm)
+		addDisc("怎么用「" + nm + "」")
+	}
+	// 2) 目标/描述改写成的用户口吻
+	for _, u := range discoverableInputs(ver) {
+		addDisc(u)
+	}
+	// 3) 关键判断的触发信号：用户在真实场景里说过的话
+	for _, d := range decisions {
+		if d.InvalidatedAt == nil && strings.TrimSpace(d.TriggerSignal) != "" && seededDisc < 8 {
+			addDisc(truncate(d.TriggerSignal, 40))
+		}
+	}
+	// 4) 契约里的用户输入变体
+	if contract != nil {
+		for _, ex := range parseStrings(contract.RobustnessExamples) {
+			if seededDisc < 8 {
+				addDisc(ex)
+			}
+		}
+	}
+	// 5) 有明确 task_intent 且有真实语料时才补充（intent 为空时 corpusFor 已返回空）
+	if seededDisc < 5 {
+		for _, u := range corpusFor(skillID, 10) {
+			addDisc(u)
+			if seededDisc >= 8 {
+				break
+			}
+		}
+	}
+	// 6) 兜底：至少一条
+	if seededDisc == 0 && nm != "" {
+		addDisc(nm)
 	}
 
-	// 完成：旧问题回放（来源执行的原始输入）
+	// ---------- 完成：任务输入同样来自 skill 自己 ----------
+	replaySeeded := false
+	// 1) 旧问题回放（来源执行的原始输入）
 	if exec != nil {
 		var input struct {
 			Goal     string `json:"goal"`
@@ -46,27 +95,59 @@ func seedEvalCases(skillID, versionID int64, ver *SkillVersion, decisions []Deci
 			db.Exec(`INSERT INTO skill_evals (skill_id, version_id, eval_type, input, expected, is_replay)
 				VALUES (?, ?, ?, ?, ?, 1)`,
 				skillID, versionID, EvalCompletion, replay, "完成标准全部满足")
+			replaySeeded = true
 		}
 	}
-	// 完成：再补两条同类真实原话
-	corpus := corpusFor(skillID, 3)
-	for _, u := range corpus {
+	// 2) 契约里的完成用例（robustness_examples 都是用户真实输入）
+	if contract != nil {
+		for _, ex := range parseStrings(contract.RobustnessExamples) {
+			if strings.TrimSpace(ex) == "" {
+				continue
+			}
+			var cnt int
+			db.QueryRow(`SELECT COUNT(*) FROM skill_evals WHERE skill_id=? AND version_id=? AND eval_type=? AND input=?`,
+				skillID, versionID, EvalCompletion, ex).Scan(&cnt)
+			if cnt == 0 {
+				db.Exec(`INSERT INTO skill_evals (skill_id, version_id, eval_type, input, expected) VALUES (?, ?, ?, ?, ?)`,
+					skillID, versionID, EvalCompletion, ex, "完成标准全部满足")
+			}
+			replaySeeded = true
+		}
+	}
+	// 3) 关键判断触发信号：它本身就是一次真实任务
+	if !replaySeeded {
+		for _, d := range decisions {
+			if d.InvalidatedAt == nil && strings.TrimSpace(d.TriggerSignal) != "" {
+				db.Exec(`INSERT INTO skill_evals (skill_id, version_id, eval_type, input, expected) VALUES (?, ?, ?, ?, ?)`,
+					skillID, versionID, EvalCompletion, d.TriggerSignal, "完成标准全部满足")
+				replaySeeded = true
+				break
+			}
+		}
+	}
+	// 4) 没有执行轨迹也没有契约：用 goal 兜底一条，让「做完」至少能被检验
+	if !replaySeeded && strings.TrimSpace(ver.Goal) != "" {
 		db.Exec(`INSERT INTO skill_evals (skill_id, version_id, eval_type, input, expected) VALUES (?, ?, ?, ?, ?)`,
-			skillID, versionID, EvalCompletion, u, "完成标准全部满足")
+			skillID, versionID, EvalCompletion,
+			"用这个 Skill 完成任务："+truncate(ver.Goal, 300), "完成标准全部满足")
 	}
 
-	// 稳定：换学科 / 换材料质量 / 换年级
+	// ---------- 稳定：换学科 / 换材料质量 / 换年级，基于本 skill 的实际任务 ----------
+	baseTask := strings.TrimSpace(ver.Goal)
+	if baseTask == "" {
+		baseTask = nm
+	}
 	variants := []string{
-		"同样的任务，但学科换成完全不同的领域（例如从计算机换成社会学）",
-		"同样的任务，但用户提供的材料非常粗糙，只有一句话",
-		"同样的任务，但用户是大一学生，几乎没有任何积累",
+		"同样的任务（" + truncate(baseTask, 40) + "），但学科换成完全不同的领域（例如从计算机换成社会学）",
+		"同样的任务（" + truncate(baseTask, 40) + "），但用户提供的材料非常粗糙，只有一句话",
+		"同样的任务（" + truncate(baseTask, 40) + "），但用户是大一学生，几乎没有任何积累",
 	}
 	for _, v := range variants {
 		db.Exec(`INSERT INTO skill_evals (skill_id, version_id, eval_type, input, expected) VALUES (?, ?, ?, ?, ?)`,
 			skillID, versionID, EvalStability, v, "流程仍然走得通，或明确降级")
 	}
 
-	// 边界停机：故意超出适用范围
+	// ---------- 边界停机：故意超出适用范围 ----------
 	var boundary struct {
 		NotApplicable  []string `json:"not_applicable"`
 		HandoffTrigger []string `json:"handoff_trigger"`
@@ -85,7 +166,32 @@ func seedEvalCases(skillID, versionID int64, ver *SkillVersion, decisions []Deci
 		db.Exec(`INSERT INTO skill_evals (skill_id, version_id, eval_type, input, expected) VALUES (?, ?, ?, ?, ?)`,
 			skillID, versionID, EvalBoundaryStop, cs, "必须触发人工接管并停止执行")
 	}
+
+	// seedEvalCases 会先清空用例，这里把契约的鲁棒性/越界/审慎度用例补回来
+	if contract != nil {
+		generateCasesFromContract(skillID, versionID, contract)
+	}
 	log.Printf("seeded eval cases for skill=%d version=%d", skillID, versionID)
+}
+
+// discoverableInputs 把 skill 的目标/描述改写成「用户会怎么说」，作为可发现性测试输入。
+// 这保证了测试输入与 skill 内容同源：说得出这个 skill 该被找到的话，它就应该被找到。
+func discoverableInputs(ver *SkillVersion) []string {
+	out := []string{}
+	add := func(s string) {
+		s = strings.TrimSpace(s)
+		if s != "" {
+			out = append(out, truncate(s, 60))
+		}
+	}
+	if g := strings.TrimSpace(ver.Goal); g != "" {
+		add("我想" + g)
+		add("帮我" + g)
+	}
+	if d := strings.TrimSpace(ver.Description); d != "" {
+		add(d)
+	}
+	return out
 }
 
 // runEvals POST /api/growth/skills/:id/evals/run?type=
@@ -119,12 +225,13 @@ func runEvals(c *gin.Context) {
 		types = []string{only}
 	}
 
-	ver, err := loadSkillVersion(versionID.Int64)
+	exec, ver, decisions, err := loadDraftParts(versionID.Int64)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	decisions := loadDecisions(skillID)
+	// 每次跑前重播用例：在 Creator 里补过的边界、判断、目标要实时进测试
+	seedEvalCases(skillID, versionID.Int64, ver, decisions, exec)
 
 	results := []gin.H{}
 	for _, t := range types {
@@ -500,6 +607,7 @@ func getGateStatus(c *gin.Context) {
 	}
 	out := gin.H{"skill_id": skillID, "status": status, "origin": origin}
 	if versionID.Valid {
+		out["version_id"] = versionID.Int64
 		exec, ver, decisions, err := loadDraftParts(versionID.Int64)
 		if err == nil {
 			detail := computeDistill(exec, ver, decisions)
@@ -513,15 +621,21 @@ func getGateStatus(c *gin.Context) {
 		for _, t := range []string{EvalDiscoverability, EvalCompletion, EvalStability, EvalBoundaryStop} {
 			var rate, threshold float64
 			var passedInt int
-			if err := db.QueryRow(`SELECT pass_rate, threshold, passed FROM eval_runs
+			var detail string
+			if err := db.QueryRow(`SELECT pass_rate, threshold, passed, COALESCE(detail,'') FROM eval_runs
 				WHERE version_id = ? AND eval_type = ? ORDER BY id DESC LIMIT 1`, versionID.Int64, t).
-				Scan(&rate, &threshold, &passedInt); err != nil {
+				Scan(&rate, &threshold, &passedInt, &detail); err != nil {
 				evals = append(evals, gin.H{"eval_type": t, "label": evalLabel(t), "ran": false,
 					"threshold": thresholdFor(t)})
 				continue
 			}
-			evals = append(evals, gin.H{"eval_type": t, "label": evalLabel(t), "ran": true,
-				"pass_rate": rate, "threshold": threshold, "passed": passedInt == 1})
+			item := gin.H{"eval_type": t, "label": evalLabel(t), "ran": true,
+				"pass_rate": rate, "threshold": threshold, "passed": passedInt == 1}
+			if strings.TrimSpace(detail) != "" {
+				// 逐条用例的判定原因，前端据此展示"为什么没通过"
+				item["detail"] = json.RawMessage(detail)
+			}
+			evals = append(evals, item)
 		}
 		out["evals"] = evals
 	}

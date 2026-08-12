@@ -76,6 +76,12 @@ const routes = [
     meta: { title: '发布前四问', requiresAuth: true },
   },
   {
+    path: '/eval/:id',
+    name: 'eval-report',
+    component: () => import('../views/EvalReport.vue'),
+    meta: { title: '评测报告', requiresAuth: true },
+  },
+  {
     path: '/trust/:id',
     name: 'trust-card',
     component: () => import('../views/TrustCard.vue'),

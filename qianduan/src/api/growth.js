@@ -138,6 +138,55 @@ export function publishSkill(skillId) {
   return req(`/skills/${skillId}/publish`, { method: 'POST' })
 }
 
+/* ---------- F6b 门禁失败反馈 + 反向指导 ---------- */
+
+/** 逐条失败原因 → 生成修复建议（diagnosis 每条含 item/why/how，draft 可直接写回草稿） */
+export function getGateFixSuggestion(skillId) {
+  return req(`/skills/${skillId}/gate-fix-suggestion`, { method: 'POST' })
+}
+
+/** 一键应用修复建议：把 draft 写回草稿并重播测试用例，返回最新草稿 */
+export function applyGateFix(skillId, fix) {
+  return req(`/skills/${skillId}/gate-apply-fix`, { method: 'POST', body: { fix } })
+}
+
+/* ---------- 评测平台（四问门禁的自动化管道）---------- */
+
+/** 触发评测管道：静态扫描 → 沙箱执行 → 评测 Agent → 人工复核 → 报告 */
+export function startEvalPipeline(skillId) {
+  return req(`/eval/skills/${skillId}/pipeline`, { method: 'POST' })
+}
+
+/** 获取评测进度与最终报告 */
+export function getEvalReport(skillId) {
+  return req(`/eval/skills/${skillId}/report`)
+}
+
+/** 人工复核队列（边缘 / 低置信度 / 一票否决边缘案例） */
+export function getHumanReviewCases(skillId) {
+  return req(`/eval/skills/${skillId}/human-review`)
+}
+
+/** 提交人工复核结果 */
+export function submitHumanReview(payload) {
+  return req('/eval/human-review/submit', { method: 'POST', body: payload })
+}
+
+/** 获取 Skill 测试契约 */
+export function getContract(skillId) {
+  return req(`/eval/skills/${skillId}/contract`)
+}
+
+/** 保存 Skill 测试契约（并重新生成测试用例） */
+export function saveContractHandler(skillId, contract) {
+  return req(`/eval/skills/${skillId}/contract`, { method: 'POST', body: { contract } })
+}
+
+/** 契约 → 预览自动生成的测试用例 */
+export function previewTestCases(contract) {
+  return req('/eval/test-cases/generate', { method: 'POST', body: contract })
+}
+
 /* ---------- F8 路由 ---------- */
 
 /** 两段式路由：先硬过滤候选集，再排序，并且必须给出解释 */

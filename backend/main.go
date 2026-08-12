@@ -12,6 +12,7 @@ func main() {
 	initPersonaSchema()
 	initChatSchema()
 	initNotificationsSchema()
+	initEvalSchema()
 
 	r := gin.Default()
 
@@ -122,6 +123,10 @@ func main() {
 		growth.GET("/skills/:id/gate", getGateStatus)
 		growth.POST("/skills/:id/publish", authMiddleware(), publishSkill)
 
+		// F6b 门禁失败反馈 + 反向指导：逐条失败原因 + 生成可写回草稿的修复建议
+		growth.POST("/skills/:id/gate-fix-suggestion", authMiddleware(), gateFixSuggestion)
+		growth.POST("/skills/:id/gate-apply-fix", authMiddleware(), gateApplyFix)
+
 		// F7/F8 准入四层与两段式路由
 		growth.POST("/route", authMiddleware(), routeSkills)
 		growth.POST("/admin/recompute-scores", authMiddleware(), recomputeAllScores)
@@ -154,6 +159,15 @@ func main() {
 		growth.POST("/executions/:id/feedback", authMiddleware(), submitExecFeedback)
 		growth.GET("/skills/:id/version-candidates", listVersionCandidates)
 		growth.POST("/version-candidates/:id/accept", authMiddleware(), acceptVersionCandidate)
+
+		// 评测平台（AI Skill 自动化评测管道）
+		growth.POST("/eval/skills/:id/pipeline", authMiddleware(), startEvalPipeline)      // 触发完整管道
+		growth.GET("/eval/skills/:id/report", getEvalReport)                               // 评测进度与报告
+		growth.GET("/eval/skills/:id/human-review", getHumanReviewCases)                   // 待人工复核项
+		growth.POST("/eval/human-review/submit", authMiddleware(), submitHumanReview)      // 人工复核提交
+		growth.GET("/eval/skills/:id/contract", getContract)                               // 查看契约与环境
+		growth.POST("/eval/skills/:id/contract", authMiddleware(), saveContractHandler)    // 保存契约（触发用例重生成）
+		growth.POST("/eval/test-cases/generate", authMiddleware(), previewTestCases)       // 契约→预览测试用例
 	}
 
 	port := os.Getenv("SKILLHUB_PORT")

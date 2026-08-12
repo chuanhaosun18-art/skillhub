@@ -193,15 +193,18 @@ const (
 const (
 	EvalDiscoverability = "discoverability"
 	EvalCompletion      = "completion"
+	EvalRobustness      = "robustness"
 	EvalStability       = "stability"
 	EvalBoundaryStop    = "boundary_stop"
+	EvalPrudence        = "prudence" // 审慎度测试（经验型：信息不足/对抗诱导）
 )
 
 // skill 来源
 const (
-	OriginRouteOne = "route_one_execution" // 先做一遍再固化（主路径）
-	OriginRouteTwo = "route_two_import"    // AI 引导对话生成（辅助，须补一次真实执行）
-	OriginOpsSeed  = "ops_seed"            // 运营种子蒸馏
+	OriginRouteOne   = "route_one_execution" // 先做一遍再固化（主路径）
+	OriginRouteTwo   = "route_two_import"    // AI 引导对话生成（辅助，须补一次真实执行）
+	OriginRouteUpload = "route_upload"       // 网页直接上传 Skill 包（先过四问门禁再上架）
+	OriginOpsSeed    = "ops_seed"            // 运营种子蒸馏
 )
 
 // 发布门禁阈值（PRD F5.3 / F6.2）

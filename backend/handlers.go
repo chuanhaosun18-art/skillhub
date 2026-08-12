@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"mime/multipart"
 	"net/http"
 	"os"
@@ -153,26 +154,37 @@ func createSkill(c *gin.Context) {
 	ownerID := c.GetInt64("userID")
 
 	// 创建 skill 记录。
-	// 「上传即进市场」：队友通过网页上传的技能直接上架，无需走门禁。
-	// 若将来要恢复门禁，把这里改回 SkillStatusGated 即可。
+	// 「上传进门禁」：队友通过网页上传的技能先进「待测试」，四问门禁通过后才上架市场。
 	result, err := db.Exec(`INSERT INTO skills (owner_id, name, description, category, tags, version,
 		status, origin, maintainer_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		ownerID, name, description, category, tags, version,
-		SkillStatusPublished, OriginRouteTwo, ownerID)
+		SkillStatusGated, OriginRouteUpload, ownerID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	skillID, _ := result.LastInsertId()
 
-	// 同步建一个版本行，后续门禁、Trust Card、溯源都挂在版本上
+	// 同步建一个版本行，后续门禁、Trust Card、溯源都挂在版本上。
+	// proof_type 用 artifact_upload：承认「有现成产物但无平台执行轨迹」，蒸馏度封顶 0.85，
+	// 想拿满分就在工作台里做一次真实任务。
+	var verID int64
 	if verRes, err := db.Exec(`INSERT INTO skill_versions (skill_id, version, description, goal,
-		done_criteria, workflow, boundary, contract, gotchas)
+		done_criteria, workflow, boundary, contract, gotchas, proof_type)
 		VALUES (?, ?, ?, ?, '[]', '[]', '{"not_applicable":[],"handoff_trigger":[],"fallback_path":""}',
-		'{"input":"","output":"","permissions":["read_upload"]}', '[]')`,
-		skillID, version, description, description); err == nil {
-		if verID, err := verRes.LastInsertId(); err == nil {
+		'{"input":"","output":"","permissions":["read_upload"]}', '[]', ?)`,
+		skillID, version, description, description, ProofArtifactUpload); err == nil {
+		if vid, err := verRes.LastInsertId(); err == nil {
+			verID = vid
 			db.Exec(`UPDATE skills SET current_version_id = ? WHERE id = ?`, verID, skillID)
+			// 预生成四类测试用例，门禁页打开就能跑
+			if ver, lerr := loadSkillVersion(verID); lerr == nil {
+				seedEvalCases(skillID, verID, ver, nil, nil)
+			}
+			// 评测平台：接收测试契约（contract）与环境需求（env），未提交则自动推导
+			contract := contractFromForm(c, skillID, name, description)
+			saveContract(contract)
+			generateCasesFromContract(skillID, verID, contract)
 		}
 	}
 
@@ -182,6 +194,17 @@ func createSkill(c *gin.Context) {
 		if err := saveAndExtractArchive(c, skillID, archive); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "save archive failed: " + err.Error()})
 			return
+		}
+		// 解析 SKILL.md 评测锚点（核心步骤/完成标准/关键判断/失败案例/适用边界）写入草稿，
+		// 让 AI 引导生成的 Skill 一上传就带齐蒸馏度六维与四问素材。
+		if verID > 0 {
+			if err := applySkillMDToDraft(skillID, verID); err != nil {
+				log.Printf("applySkillMDToDraft skill=%d: %v", skillID, err)
+			}
+			// 草稿就绪后用真实内容重播测试用例（覆盖创建时用空草稿播种的那批）
+			if ver, lerr := loadSkillVersion(verID); lerr == nil {
+				seedEvalCases(skillID, verID, ver, loadDecisions(skillID), nil)
+			}
 		}
 	}
 
@@ -208,12 +231,14 @@ func createSkill(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	contract, _ := loadContract(skillID)
 	c.JSON(http.StatusCreated, gin.H{
-		"data":   skill,
-		"status": SkillStatusPublished,
+		"data":     skill,
+		"status":   SkillStatusGated,
+		"contract": contract,
 		"gate": gin.H{
-			"published": true,
-			"message":   "已发布并上架市场，所有人现在都可以搜索到它。",
+			"published": false,
+			"message":   "已上传，进入四问测试门禁。评测管道通过后才会出现在市场里。",
 		},
 	})
 }
