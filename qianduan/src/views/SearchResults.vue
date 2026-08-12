@@ -70,6 +70,12 @@ function goBack() {
   router.push('/')
 }
 
+// 搜索无结果 → 论坛：带关键词过去，并直接打开发帖框
+function goForum() {
+  const kw = keyword.value.trim()
+  router.push({ path: '/forum', query: kw ? { q: kw, ask: '1' } : { ask: '1' } })
+}
+
 function goDetail(id) {
   router.push({ path: `/skill/${id}` })
 }
@@ -111,6 +117,15 @@ function onProofError(e) {
           </template>
           <span v-else>技能列表</span>
         </div>
+        <!-- 有结果但不符合预期 → 去论坛找 skill -->
+        <el-button
+          v-if="searched && results.length"
+          class="forum-entry"
+          @click="goForum"
+        >
+          <el-icon><ChatLineRound /></el-icon>
+          结果不符合预期？去论坛找找
+        </el-button>
       </div>
 
       <!-- 筛选栏 -->
@@ -176,9 +191,12 @@ function onProofError(e) {
           </div>
         </div>
 
-        <!-- 空状态 -->
-        <el-empty v-else-if="searched" description="没有找到匹配的技能，换个关键词试试吧">
-          <el-button type="primary" @click="goBack">返回首页</el-button>
+        <!-- 空状态：搜不到 → 去论坛。Skill 库没有的东西，值得发帖问一问 -->
+        <el-empty v-else-if="searched" description="没有找到匹配的技能。它可能还没有人做成 Skill——去论坛问问看">
+          <div class="empty-actions">
+            <el-button type="primary" @click="goForum">去论坛提问</el-button>
+            <el-button @click="goBack">返回首页</el-button>
+          </div>
         </el-empty>
       </template>
     </main>
@@ -218,6 +236,18 @@ function onProofError(e) {
 
 .result-header {
   margin-bottom: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.forum-entry {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .result-meta {
@@ -276,6 +306,11 @@ function onProofError(e) {
   padding: 16px;
   background: #fff;
   border-radius: 8px;
+}
+
+.empty-actions {
+  display: flex;
+  gap: 12px;
 }
 
 .skill-list {

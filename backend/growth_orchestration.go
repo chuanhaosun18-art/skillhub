@@ -112,6 +112,24 @@ func loadSourcePaths(intent string) []sourcePath {
 	}
 	defer rows.Close()
 
+	// 单连接模式下循环体内不能再发起 db 查询（会死锁并永久占用唯一连接），
+	// 所以先把所有 path 的节点一次性预取到内存 map。
+	nodesByPath := map[int64][]pathNodeLite{}
+	nr, err := db.Query(`SELECT path_id, id, node_index, label, COALESCE(task_intent,''), week_offset, controllable
+		FROM path_nodes ORDER BY path_id, node_index`)
+	if err == nil {
+		for nr.Next() {
+			var pathID int64
+			var n pathNodeLite
+			var ctrl int
+			if nr.Scan(&pathID, &n.ID, &n.NodeIndex, &n.Label, &n.TaskIntent, &n.WeekOffset, &ctrl) == nil {
+				n.Controllable = ctrl == 1
+				nodesByPath[pathID] = append(nodesByPath[pathID], n)
+			}
+		}
+		nr.Close()
+	}
+
 	out := []sourcePath{}
 	for rows.Next() {
 		var p sourcePath
@@ -120,7 +138,7 @@ func loadSourcePaths(intent string) []sourcePath {
 			continue
 		}
 		p.Branch = rawOrDefault(branch, "{}")
-		p.Nodes = loadPathNodes(p.ID, p.Provenance)
+		p.Nodes = nodesByPath[p.ID]
 		if len(p.Nodes) < PathMinNodesForOrch {
 			continue // 节点太少撑不起编排
 		}

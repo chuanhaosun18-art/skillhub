@@ -55,6 +55,9 @@
           size="small"
           @click="handleResource(r)"
         >{{ r.label }}</el-button>
+        <el-button size="small" type="primary" plain @click="goForum">
+          去论坛聊聊
+        </el-button>
       </div>
 
       <!-- 「该不该」型问题：不给建议，只给别人走过的分支与人数 -->
@@ -82,6 +85,11 @@
           class="sv" :class="v ? 'ok' : 'no'">
           {{ sieveLabel(k) }}{{ v ? ' 通过' : ' 未通过' }}
         </span>
+      </div>
+      <div class="reject-actions" style="margin-top: 14px">
+        <el-button size="small" type="primary" plain @click="goForum">
+          去论坛聊聊
+        </el-button>
       </div>
     </section>
 
@@ -227,6 +235,12 @@ function handleResource(r) {
 
 function goOrchestration(intent) {
   router.push({ path: '/orchestration', query: { intent, goal: utterance.value } })
+}
+
+// 「没有 Skill 能解」→ 论坛：带原话过去，直接发一帖问有没有人遇到过
+function goForum() {
+  const kw = utterance.value.trim()
+  router.push({ path: '/forum', query: kw ? { q: kw, ask: '1' } : { ask: '1' } })
 }
 </script>
 

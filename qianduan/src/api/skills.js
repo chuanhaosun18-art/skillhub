@@ -162,16 +162,29 @@ export async function deleteSkill(id) {
 
 // ---------- AI 引导创建 Skill ----------
 
-async function guideRequest(path, payload) {
+async function guideRequest(path, payload, timeoutMs = 0) {
   const token = getToken()
-  const resp = await fetch(`${BASE}${path}`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
-    body: JSON.stringify(payload),
-  })
+  const controller = timeoutMs > 0 ? new AbortController() : null
+  const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null
+  let resp
+  try {
+    resp = await fetch(`${BASE}${path}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify(payload),
+      ...(controller ? { signal: controller.signal } : {}),
+    })
+  } catch (e) {
+    if (controller && controller.signal.aborted) {
+      throw new Error('生成超时，请稍后重试')
+    }
+    throw new Error('网络错误，请检查连接后重试')
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
   let data = null
   try {
     data = await resp.json()
@@ -186,12 +199,18 @@ async function guideRequest(path, payload) {
 
 /**
  * AI 引导对话（需登录）。messages 为完整对话历史，attachment 为当前消息附件（可选）
+ * 后端每轮自动保存对话（虚拟自己蒸馏素材）并返回 conversation_id
  * @param {Array} messages [{role, content}]
  * @param {{type: 'image'|'file', name: string, mime: string, data: string}|null} [attachment]
- * @returns {Promise<{data: string}>}
+ * @param {number} [conversationId] 上一轮返回的会话 id，首次传 0
+ * @returns {Promise<{data: string, conversation_id: number}>}
  */
-export async function guideChat(messages, attachment = null) {
-  return guideRequest('/api/skills/guide/chat', { messages, attachment })
+export async function guideChat(messages, attachment = null, conversationId = 0) {
+  return guideRequest('/api/skills/guide/chat', {
+    messages,
+    attachment,
+    conversation_id: conversationId,
+  })
 }
 
 /**
@@ -200,7 +219,8 @@ export async function guideChat(messages, attachment = null) {
  * @returns {Promise<{data: {name, title, description, category, tags, version, files, zip_base64}}>}
  */
 export async function generateSkillPack(messages) {
-  return guideRequest('/api/skills/guide/generate', { messages })
+  // 生成包含两阶段 LLM 调用（需求提炼 + 完整打包），给足 200 秒，超时明确报错而非无限转圈
+  return guideRequest('/api/skills/guide/generate', { messages }, 200000)
 }
 
 // ---------- 评分 / 评价 ----------

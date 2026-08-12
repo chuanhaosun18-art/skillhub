@@ -297,9 +297,26 @@ func routeSkills(c *gin.Context) {
 		stage = u.Grade
 	}
 
+	// 预取每个版本的使用次数。注意：SetMaxOpenConns(1) 单连接模式下，
+	// 持有 rows 的循环体内不能再发起任何 db 查询（会死锁并永久占用唯一连接），
+	// 所以这里先把 executions 计数一次性取到内存 map 里。
+	callCounts := map[int64]int{}
+	ccRows, err := db.Query(`SELECT skill_version_id, COUNT(*) FROM executions GROUP BY skill_version_id`)
+	if err == nil {
+		for ccRows.Next() {
+			var vid int64
+			var n int
+			if ccRows.Scan(&vid, &n) == nil {
+				callCounts[vid] = n
+			}
+		}
+		ccRows.Close()
+	}
+
 	rows, err := db.Query(`SELECT s.id, s.name, COALESCE(v.description, s.description), COALESCE(v.version,''),
 		COALESCE(v.id, 0), COALESCE(s.task_intent,''), COALESCE(sc.quality_score, 0),
-		COALESCE(sc.sample_sufficient, 0), COALESCE(sc.is_candidate_eligible, 0), COALESCE(v.contract,'{}')
+		COALESCE(sc.sample_sufficient, 0), COALESCE(sc.is_candidate_eligible, 0), COALESCE(v.contract,'{}'),
+		COALESCE(v.goal,''), COALESCE(v.done_criteria,'')
 		FROM skills s
 		LEFT JOIN skill_versions v ON v.id = s.current_version_id
 		LEFT JOIN skill_scores sc ON sc.skill_id = s.id
@@ -318,9 +335,9 @@ func routeSkills(c *gin.Context) {
 	for rows.Next() {
 		var rc routeCandidate
 		var sampleOK, eligible int
-		var contract string
+		var contract, goal, doneCriteria string
 		if err := rows.Scan(&rc.SkillID, &rc.Name, &rc.Description, &rc.Version, &rc.VersionID,
-			&rc.TaskIntent, &rc.Quality, &sampleOK, &eligible, &contract); err != nil {
+			&rc.TaskIntent, &rc.Quality, &sampleOK, &eligible, &contract, &goal, &doneCriteria); err != nil {
 			continue
 		}
 		rc.SampleOK = sampleOK == 1
@@ -340,8 +357,8 @@ func routeSkills(c *gin.Context) {
 		}
 		rc.TaskFit = 0.6*sim + 0.4*exact
 
-		// user_fit：阶段与前置
-		rc.UserFit = userFit(stage, rc.VersionID)
+		// user_fit：阶段与前置（数据已随主查询带出，循环内不再查库）
+		rc.UserFit = userFit(stage, goal, doneCriteria, contract)
 
 		// risk_penalty
 		var ct struct {
@@ -359,9 +376,8 @@ func routeSkills(c *gin.Context) {
 		}
 		rc.RiskPenalty = 0.5*breadth + 0.3*irr
 
-		db.QueryRow(`SELECT COUNT(*) FROM executions WHERE skill_version_id = ?`, rc.VersionID).Scan(&rc.CallCount)
-
 		rc.Rank = 0.30*rc.Quality + 0.35*rc.TaskFit + 0.25*rc.UserFit - 0.10*rc.RiskPenalty
+		rc.CallCount = callCounts[rc.VersionID]
 		all = append(all, rc)
 	}
 
@@ -442,28 +458,22 @@ func routeSkills(c *gin.Context) {
 	})
 }
 
-// userFit 阶段与前置匹配
-func userFit(stage string, versionID int64) float64 {
-	if versionID == 0 {
-		return 0.5
-	}
-	ver, err := loadSkillVersion(versionID)
-	if err != nil {
-		return 0.5
-	}
+// userFit 阶段与前置匹配。数据由调用方传入（主查询带出的 goal/done_criteria/contract），
+// 函数本身不再查库——单连接模式下循环体内不能发起任何 db 查询。
+func userFit(stage, goal, doneCriteria, contract string) float64 {
 	score := 0.0
 	// stage_match：Skill 的适用阶段目前写在 goal 文本里，未知阶段给中位分。
 	// 画像是执行副产品，第一次必然粗糙——我们不假装它精准。
 	if stage == "" {
 		score += 0.4 * 0.5
-	} else if strings.Contains(ver.Goal, stage) {
+	} else if strings.Contains(goal, stage) {
 		score += 0.4
 	} else {
 		score += 0.4 * 0.6
 	}
 	// constraint_match：暂以完成标准是否明确近似
 	var criteria []string
-	json.Unmarshal([]byte(ver.DoneCriteria), &criteria)
+	json.Unmarshal([]byte(doneCriteria), &criteria)
 	if len(criteria) > 0 {
 		score += 0.3
 	}
@@ -471,7 +481,7 @@ func userFit(stage string, versionID int64) float64 {
 	var deps struct {
 		PrerequisiteSkillIDs []int64 `json:"prerequisite_skill_ids"`
 	}
-	json.Unmarshal([]byte(ver.Contract), &deps)
+	json.Unmarshal([]byte(contract), &deps)
 	if len(deps.PrerequisiteSkillIDs) == 0 {
 		score += 0.3
 	}

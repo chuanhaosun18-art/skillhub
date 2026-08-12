@@ -182,5 +182,8 @@ CREATE INDEX IF NOT EXISTS idx_issues_skill ON skill_issues(skill_id);
 	// 成长闭环相关表（增量迁移，见 growth_db.go）
 	initGrowthSchema()
 
+	// 论坛相关表（见 forum.go）
+	initForumSchema()
+
 	log.Println("database initialized:", DBPath)
 }

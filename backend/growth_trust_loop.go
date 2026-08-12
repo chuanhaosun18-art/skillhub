@@ -451,19 +451,7 @@ func isValidIssueType(t string) bool {
 // checkVersionTriggers 版本候选触发规则。
 // repeated_failure：同一 issue_type 在 14 天内 ≥3 次，且来自 ≥3 个不同用户。
 func checkVersionTriggers(skillID int64) (bool, string, int) {
-	rows, err := db.Query(`SELECT issue_type, COUNT(*) AS c, COUNT(DISTINCT user_id) AS u
-		FROM exec_feedbacks
-		WHERE skill_id = ? AND adopted = 0
-		  AND created_at >= datetime('now','-14 days')
-		GROUP BY issue_type`, skillID)
-	if err != nil {
-		return false, "", 0
-	}
-	defer rows.Close()
-
-	// 冷启动门槛（v1.2 第 5 条）：标准规则要求 3 次 + 3 个用户，
-	// 但早期一个 Skill 总共可能只有 5 次调用，那条闭环永远不会自动触发。
-	// 调用量不足时降到 2 次 + 2 个用户——降低门槛但不降低"要有独立验证"这个要求。
+	// 单连接模式下，先取冷启动门槛（rows 打开前查库是安全的）
 	var callCount int
 	db.QueryRow(`SELECT COUNT(*) FROM executions WHERE skill_version_id IN
 		(SELECT id FROM skill_versions WHERE skill_id = ?)`, skillID).Scan(&callCount)
@@ -472,13 +460,32 @@ func checkVersionTriggers(skillID int64) (bool, string, int) {
 		needCount, needUsers = 2, 2
 	}
 
+	// 聚合数据先全部读进内存，关闭 rows 之后才能继续查库/写库
+	type fbAgg struct {
+		issueType string
+		count     int
+		users     int
+	}
+	aggs := []fbAgg{}
+	rows, err := db.Query(`SELECT issue_type, COUNT(*) AS c, COUNT(DISTINCT user_id) AS u
+		FROM exec_feedbacks
+		WHERE skill_id = ? AND adopted = 0
+		  AND created_at >= datetime('now','-14 days')
+		GROUP BY issue_type`, skillID)
+	if err != nil {
+		return false, "", 0
+	}
 	for rows.Next() {
-		var issueType string
-		var count, users int
-		if rows.Scan(&issueType, &count, &users) != nil {
+		var a fbAgg
+		if rows.Scan(&a.issueType, &a.count, &a.users) != nil {
 			continue
 		}
-		if count >= needCount && users >= needUsers {
+		aggs = append(aggs, a)
+	}
+	rows.Close()
+
+	for _, a := range aggs {
+		if a.count >= needCount && a.users >= needUsers {
 			// 已有 open 候选则不重复创建
 			var existing int
 			db.QueryRow(`SELECT COUNT(*) FROM version_candidates WHERE skill_id = ? AND status = 'open'`, skillID).
@@ -488,7 +495,7 @@ func checkVersionTriggers(skillID int64) (bool, string, int) {
 			}
 			ids := []int64{}
 			r2, err := db.Query(`SELECT id FROM exec_feedbacks WHERE skill_id = ? AND issue_type = ?
-				AND adopted = 0 AND created_at >= datetime('now','-14 days')`, skillID, issueType)
+				AND adopted = 0 AND created_at >= datetime('now','-14 days')`, skillID, a.issueType)
 			if err == nil {
 				for r2.Next() {
 					var id int64
@@ -499,16 +506,16 @@ func checkVersionTriggers(skillID int64) (bool, string, int) {
 				r2.Close()
 			}
 			evidence := gin.H{
-				"issue_type":   issueType,
-				"count":        count,
-				"unique_users": users,
+				"issue_type":   a.issueType,
+				"count":        a.count,
+				"unique_users": a.users,
 				"feedback_ids": ids,
 			}
 			db.Exec(`INSERT INTO version_candidates (skill_id, trigger_rule, evidence, status)
 				VALUES (?, 'repeated_failure', ?, 'open')`, skillID, jsonOrEmpty(evidence))
 			db.Exec(`UPDATE skills SET status = ? WHERE id = ? AND COALESCE(status,'') = ?`,
 				SkillStatusNeedsReview, skillID, SkillStatusPublished)
-			return true, "repeated_failure", count
+			return true, "repeated_failure", a.count
 		}
 	}
 	return false, "", 0

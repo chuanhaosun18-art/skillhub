@@ -15,6 +15,18 @@ const routes = [
     meta: { title: '搜索结果' },
   },
   {
+    path: '/forum',
+    name: 'forum',
+    component: () => import('../views/Forum.vue'),
+    meta: { title: '论坛 · 没做成 Skill 的东西' },
+  },
+  {
+    path: '/forum/:id',
+    name: 'forum-detail',
+    component: () => import('../views/ForumDetail.vue'),
+    meta: { title: '帖子详情' },
+  },
+  {
     path: '/skill/:id',
     name: 'skill-detail',
     component: () => import('../views/SkillDetail.vue'),
@@ -74,6 +86,24 @@ const routes = [
     name: 'growth-profile',
     component: () => import('../views/GrowthProfile.vue'),
     meta: { title: '成长身份' },
+  },
+  {
+    path: '/persona-chat/:chatId',
+    name: 'persona-chat',
+    component: () => import('../views/PersonaChat.vue'),
+    meta: { title: '与虚拟自己聊天', requiresAuth: true },
+  },
+  {
+    path: '/chat',
+    name: 'chat-list',
+    component: () => import('../views/DirectChat.vue'),
+    meta: { title: '消息', requiresAuth: true },
+  },
+  {
+    path: '/chat/:id',
+    name: 'chat-detail',
+    component: () => import('../views/DirectChat.vue'),
+    meta: { title: '在线聊天', requiresAuth: true },
   },
   {
     path: '/orchestration',

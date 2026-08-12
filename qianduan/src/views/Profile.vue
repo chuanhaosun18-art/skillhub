@@ -1,16 +1,20 @@
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { authState, fetchMe, updateProfile, fetchMySkills } from '../api/auth'
 import { deleteSkill } from '../api/skills'
+import { getMyPersona, updateMyPersona, listMyPersonaChats } from '../api/persona'
 import AppNavbar from '../components/AppNavbar.vue'
 import GrowthPath from '../components/GrowthPath.vue'
 
 const router = useRouter()
+const route = useRoute()
 const loading = ref(false)
 const saving = ref(false)
 const mySkills = ref([])
+const myPersona = ref(null)
+const personaChats = ref([])
 
 const editForm = reactive({
   email: '',
@@ -37,7 +41,19 @@ onMounted(async () => {
     const u = await fetchMe()
     fillForm(u)
     mySkills.value = await fetchMySkills()
+    // 虚拟自己：开关状态 + 别人与虚拟我的聊天记录（对方允许时可见）
+    const [p, chats] = await Promise.all([
+      getMyPersona().catch(() => null),
+      listMyPersonaChats().catch(() => []),
+    ])
+    myPersona.value = p
+    personaChats.value = chats
   } catch (e) {
+    // 登录态失效（401 已被 auth 层清空）→ 引导回登录页，避免整页空白
+    if (!authState.user) {
+      router.push({ path: '/login', query: { redirect: route.fullPath } })
+      return
+    }
     ElMessage.error(e.message || '加载失败')
   } finally {
     loading.value = false
@@ -87,6 +103,21 @@ async function handleDelete(skill) {
 function formatDate(d) {
   if (!d) return ''
   return new Date(d).toLocaleDateString('zh-CN')
+}
+
+async function handleTogglePersona(val) {
+  try {
+    await updateMyPersona(val)
+    if (myPersona.value) myPersona.value.chat_enabled = val
+    ElMessage.success(val ? '已开启虚拟自己，别人可以来和你聊天了' : '已关闭虚拟自己，别人无法再与它聊天')
+  } catch (e) {
+    ElMessage.error(e.message || '操作失败')
+    if (myPersona.value) myPersona.value.chat_enabled = !val
+  }
+}
+
+function openPersonaChat(chatId, visitor) {
+  router.push({ path: `/persona-chat/${chatId}`, query: { mode: 'owner', name: visitor } })
 }
 
 const aiLevelMap = {
@@ -143,6 +174,46 @@ function aiLevelLabel(level) {
               <el-icon><MagicStick /></el-icon>&nbsp;AI {{ aiLevelLabel(authState.user.ai_level) }}
             </el-tag>
           </div>
+        </section>
+
+        <!-- 我的虚拟自己：别人可与"蒸馏的你"聊天；记录是否可见由对方决定 -->
+        <section class="card persona-card">
+          <div class="section-head">
+            <h2 class="section-title">我的虚拟自己</h2>
+            <div class="persona-toggle">
+              <span class="persona-toggle-label">允许别人与虚拟的我聊天</span>
+              <el-switch
+                :model-value="!!(myPersona && myPersona.has_persona && myPersona.chat_enabled)"
+                :disabled="!myPersona || !myPersona.has_persona"
+                @change="handleTogglePersona"
+              />
+            </div>
+          </div>
+
+          <template v-if="myPersona && myPersona.has_persona">
+            <div class="persona-text">{{ myPersona.persona_text }}</div>
+            <div class="persona-meta">已被 {{ myPersona.chat_count }} 位访客聊过</div>
+
+            <template v-if="personaChats.length">
+              <div class="persona-chats-title">别人与虚拟我的聊天（对方允许查看的）</div>
+              <div
+                v-for="c in personaChats"
+                :key="c.chat_id"
+                class="persona-chat-row"
+                @click="openPersonaChat(c.chat_id, c.visitor)"
+              >
+                <span class="persona-chat-name">{{ c.visitor }}</span>
+                <span class="persona-chat-last">{{ c.last_msg || '（还没有消息）' }}</span>
+                <span class="persona-chat-time">{{ formatDate(c.created_at) }}</span>
+              </div>
+            </template>
+            <div v-else class="persona-chats-empty">还没有访客来聊过，或对方都选择了"不让你看到"</div>
+          </template>
+          <template v-else>
+            <div class="persona-empty">
+              还没有生成。去「发布技能」里和 AI 聊一次你的经验，对话会被保留并蒸馏成虚拟自己。
+            </div>
+          </template>
         </section>
 
         <!-- 编辑资料 -->
@@ -218,6 +289,17 @@ function aiLevelLabel(level) {
           </template>
           <el-empty v-else description="你还没有发布任何技能">
             <el-button type="primary" @click="goPublish">去发布第一个技能</el-button>
+          </el-empty>
+        </section>
+      </template>
+
+      <!-- 未登录/登录过期：显示引导而不是空白 -->
+      <template v-else>
+        <section class="card">
+          <el-empty description="登录后即可查看个人中心">
+            <el-button type="primary" @click="router.push({ path: '/login', query: { redirect: route.fullPath } })">
+              去登录
+            </el-button>
           </el-empty>
         </section>
       </template>
@@ -300,6 +382,83 @@ function aiLevelLabel(level) {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+/* 虚拟自己 */
+.persona-card {
+  border-top: 3px solid #67c23a;
+}
+.persona-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.persona-toggle-label {
+  font-size: 13px;
+  color: #606266;
+}
+.persona-text {
+  font-size: 13px;
+  color: #606266;
+  line-height: 1.8;
+  background: #f6fdf8;
+  border: 1px solid #e6f6ec;
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin-bottom: 8px;
+  white-space: pre-wrap;
+}
+.persona-meta {
+  font-size: 12px;
+  color: #c0c4cc;
+  margin-bottom: 12px;
+}
+.persona-chats-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #303133;
+  margin: 12px 0 8px;
+}
+.persona-chat-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid #ebeef5;
+  margin-bottom: 8px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.persona-chat-row:hover {
+  background: #f5f7fa;
+}
+.persona-chat-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: #409eff;
+  flex-shrink: 0;
+}
+.persona-chat-last {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  color: #606266;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.persona-chat-time {
+  font-size: 12px;
+  color: #c0c4cc;
+  flex-shrink: 0;
+}
+.persona-chats-empty,
+.persona-empty {
+  font-size: 13px;
+  color: #909399;
+  line-height: 1.7;
+  padding: 10px 0;
 }
 
 .section-title {

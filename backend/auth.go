@@ -128,6 +128,15 @@ func quizToJSON(q aiQuizInput) string {
 	return string(b)
 }
 
+// emailOrNil 空邮箱写入 NULL：email 列有 UNIQUE 约束，空字符串会与既有空邮箱用户冲突，
+// 而 SQLite 的 UNIQUE 允许多个 NULL。
+func emailOrNil(email string) interface{} {
+	if strings.TrimSpace(email) == "" {
+		return nil
+	}
+	return email
+}
+
 // register POST /api/auth/register
 func register(c *gin.Context) {
 	var req registerReq
@@ -156,7 +165,7 @@ func register(c *gin.Context) {
 	}
 
 	res, err := db.Exec(`INSERT INTO users (username, email, password_hash, school, grade, major, bio, ai_level, ai_quiz) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		req.Username, req.Email, string(hash), req.School, req.Grade, req.Major, req.Bio, aiLevel, aiQuiz)
+		req.Username, emailOrNil(req.Email), string(hash), req.School, req.Grade, req.Major, req.Bio, aiLevel, aiQuiz)
 	if err != nil {
 		c.JSON(http.StatusConflict, gin.H{"error": "username or email already exists"})
 		return
@@ -198,7 +207,7 @@ func login(c *gin.Context) {
 
 	var u User
 	var pwdHash string
-	err := db.QueryRow(`SELECT id, username, email, avatar, school, grade, major, bio, ai_level, ai_quiz, password_hash, created_at
+	err := db.QueryRow(`SELECT id, username, COALESCE(email, ''), avatar, school, grade, major, bio, ai_level, ai_quiz, password_hash, created_at
 		FROM users WHERE username = ? OR email = ?`, req.Account, req.Account).
 		Scan(&u.ID, &u.Username, &u.Email, &u.Avatar, &u.School, &u.Grade, &u.Major, &u.Bio, &u.AILevel, &u.AIQuiz, &pwdHash, &u.CreatedAt)
 	if err != nil {
@@ -266,7 +275,7 @@ func updateUser(c *gin.Context) {
 		}
 	}
 	if _, err := db.Exec(`UPDATE users SET email = ?, school = ?, grade = ?, major = ?, bio = ?, avatar = ?, ai_level = ?, ai_quiz = ? WHERE id = ?`,
-		req.Email, req.School, req.Grade, req.Major, req.Bio, req.Avatar, aiLevel, aiQuiz, uid); err != nil {
+		emailOrNil(req.Email), req.School, req.Grade, req.Major, req.Bio, req.Avatar, aiLevel, aiQuiz, uid); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -314,7 +323,7 @@ func mySkills(c *gin.Context) {
 
 func getUserByID(id int64) (*User, error) {
 	var u User
-	err := db.QueryRow(`SELECT id, username, email, avatar, school, grade, major, bio, ai_level, ai_quiz, created_at
+	err := db.QueryRow(`SELECT id, username, COALESCE(email, ''), avatar, school, grade, major, bio, ai_level, ai_quiz, created_at
 		FROM users WHERE id = ?`, id).
 		Scan(&u.ID, &u.Username, &u.Email, &u.Avatar, &u.School, &u.Grade, &u.Major, &u.Bio, &u.AILevel, &u.AIQuiz, &u.CreatedAt)
 	if err != nil {

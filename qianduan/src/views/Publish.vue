@@ -2,7 +2,11 @@
 import { ref, reactive, computed, nextTick, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
+import {
+  UploadFilled, MagicStick, Back, Document, Plus, Picture, Microphone, FolderOpened,
+} from '@element-plus/icons-vue'
 import { createSkill, guideChat, generateSkillPack } from '../api/skills'
+import { distillConversation } from '../api/persona'
 import { authState } from '../api/auth'
 import AppNavbar from '../components/AppNavbar.vue'
 
@@ -127,6 +131,7 @@ const messages = ref([])
 const inputText = ref('')
 const sending = ref(false)
 const generating = ref(false)
+const conversationId = ref(0) // 引导对话保留会话 id（后端每轮返回，蒸馏素材）
 const chatBox = ref(null)
 
 // 引导进度：LLM 在回复中夹带 【进度】标签
@@ -300,7 +305,8 @@ async function sendMessages() {
 
   sending.value = true
   try {
-    const resp = await guideChat(history, attachment)
+    const resp = await guideChat(history, attachment, conversationId.value)
+    if (resp.conversation_id) conversationId.value = resp.conversation_id
     const reply = resp.data || ''
     extractProgress(reply)
     // 剥离进度标签，避免在气泡中露出
@@ -335,12 +341,23 @@ const skillMdPreview = computed(() => {
   return md ? md.content : ''
 })
 
+// 计算文件大小（KB）。Blob 不在 Vue 模板全局白名单中，需在脚本侧计算
+function genFileSizeKB(content) {
+  return ((new Blob([content]).size) / 1024).toFixed(1)
+}
+
 async function handleGenerate() {
   if (messages.value.length === 0) {
     ElMessage.warning('还没有任何对话内容，先和 AI 聊聊你的想法吧')
     return
   }
   generating.value = true
+  const loadingTip = ElMessage({
+    message: '正在生成 Skill 包，AI 正在整理你的经验（约需 1 分钟）…',
+    duration: 0,
+    type: 'info',
+    customClass: 'gen-loading-tip',
+  })
   try {
     const resp = await generateSkillPack(
       messages.value
@@ -355,10 +372,17 @@ async function handleGenerate() {
     publishInfo.tags = Array.isArray(d.tags) ? d.tags : []
     publishInfo.version = d.version || '1.0.0'
     await scrollToBottom()
+    // 对话已保留：静默蒸馏成"虚拟自己"（不阻塞发布流程）
+    if (conversationId.value) {
+      distillConversation(conversationId.value)
+        .then(() => ElMessage.success('已生成你的"虚拟自己"，可在个人中心查看与开关'))
+        .catch(() => {})
+    }
   } catch (e) {
     ElMessage.error(e.message || '生成失败，请重试')
   } finally {
     generating.value = false
+    loadingTip.close()
   }
 }
 
@@ -692,7 +716,7 @@ function backToModeSelect() {
             <div v-for="(f, i) in genResult.files" :key="i" class="gen-file-item">
               <el-icon color="#67c23a"><FolderOpened /></el-icon>
               <span class="gen-file-path">{{ f.path }}</span>
-              <span class="gen-file-size">{{ (new Blob([f.content]).size / 1024).toFixed(1) }} KB</span>
+              <span class="gen-file-size">{{ genFileSizeKB(f.content) }} KB</span>
             </div>
           </div>
 

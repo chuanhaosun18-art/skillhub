@@ -9,6 +9,8 @@ import (
 
 func main() {
 	initDB()
+	initPersonaSchema()
+	initChatSchema()
 
 	r := gin.Default()
 
@@ -54,6 +56,32 @@ func main() {
 	api.POST("/skills/:id/issues", authMiddleware(), createIssue)
 	api.GET("/skills/:id/issues", listIssues)
 	api.PATCH("/issues/:id", authMiddleware(), closeIssue)
+
+	// 论坛（Forum）：不能成为 Skill 的经验、询问、寻找没有 Skill 的地方。
+	// 前台搜索路由不到 Skill 时的出口。游客可读，登录可发帖与回复。
+	api.GET("/forum/topics", listForumTopics)
+	api.POST("/forum/topics", authMiddleware(), createForumTopic)
+	api.GET("/forum/topics/:id", getForumTopic)
+	api.POST("/forum/topics/:id/replies", authMiddleware(), createForumReply)
+	api.POST("/forum/topics/:id/like", authMiddleware(), likeTopic)
+	api.POST("/forum/replies/:id/like", authMiddleware(), likeReply)
+
+	// 虚拟自己（Persona）：引导对话保留/蒸馏/扮演/权限
+	api.POST("/persona/conversations", authMiddleware(), saveConversation)
+	api.POST("/persona/conversations/:id/distill", authMiddleware(), distillConversation)
+	api.GET("/persona/me", authMiddleware(), getMyPersona)
+	api.PATCH("/persona/me", authMiddleware(), updateMyPersona)
+	api.GET("/persona/public/:userId", optionalAuth(), getPublicPersona)
+	api.POST("/persona/public/:userId/chats", authMiddleware(), createPersonaChat)
+	api.POST("/persona/chat/:chatId/messages", authMiddleware(), sendPersonaChatMessage)
+	api.GET("/persona/chat/:chatId/messages", authMiddleware(), getPersonaChatMessages)
+	api.GET("/persona/me/chats", authMiddleware(), listMyPersonaChats)
+
+	// 在线聊天（Direct Chat）：轮询实现
+	api.POST("/chat/direct", authMiddleware(), createDirectChat)
+	api.GET("/chat/direct", authMiddleware(), listDirectChats)
+	api.POST("/chat/direct/:id/messages", authMiddleware(), sendDirectMessage)
+	api.GET("/chat/direct/:id/messages", authMiddleware(), getDirectMessages)
 	}
 
 	// ---------- 成长闭环（PRD P0）----------

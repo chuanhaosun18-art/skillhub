@@ -1,0 +1,24 @@
+name: Validate skills
+
+# 队友往 skills/ 提 PR 时，自动校验每个 skill.json 的格式，
+# 保证合入后的资料一定能被本地导入工具直接入库。
+
+on:
+  pull_request:
+    paths:
+      - 'skills/**'
+  push:
+    branches: [main]
+    paths:
+      - 'skills/**'
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate skills format
+        run: python scripts/validate_skills.py

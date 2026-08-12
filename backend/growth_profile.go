@@ -158,6 +158,51 @@ func buildGrowthProfile(c *gin.Context, uid int64, isSelf bool) {
 
 // loadTimeline 成长路线：真实执行按时间排列，每个节点带它产出了什么
 func loadTimeline(uid int64) []pathNode {
+	// 单连接模式（SetMaxOpenConns(1)）下，唯一的连接被 db.Query 返回的 rows 占用后，
+	// 在 rows 关闭前再发起任何 db 查询都会永久死锁——不管在循环体内还是循环外。
+	// 所以所有辅助查询必须先于主查询完成，结果存内存 map，主查询的循环体里只查 map。
+	stepCounts := map[int64]int{}
+	if scRows, err := db.Query(`SELECT execution_id, COUNT(*) FROM execution_steps GROUP BY execution_id`); err == nil {
+		for scRows.Next() {
+			var eid, n int64
+			if scRows.Scan(&eid, &n) == nil {
+				stepCounts[eid] = int(n)
+			}
+		}
+		scRows.Close()
+	}
+	decisionCounts := map[int64]int{}
+	if dcRows, err := db.Query(`SELECT execution_id, COUNT(*) FROM execution_steps
+		WHERE step_type = ? AND user_choice != '' GROUP BY execution_id`, StepUserDecision); err == nil {
+		for dcRows.Next() {
+			var eid, n int64
+			if dcRows.Scan(&eid, &n) == nil {
+				decisionCounts[eid] = int(n)
+			}
+		}
+		dcRows.Close()
+	}
+	// 执行固化成 Skill 的映射：source_execution_id -> 产出（ORDER BY v.id，最后一次覆盖即最新）
+	type skillOut struct {
+		id     int64
+		name   string
+		status string
+	}
+	skillByExec := map[int64]skillOut{}
+	if skRows, err := db.Query(`SELECT v.source_execution_id, s.id, s.name, COALESCE(s.status,'')
+		FROM skill_versions v JOIN skills s ON s.id = v.skill_id
+		WHERE v.source_execution_id IS NOT NULL ORDER BY v.id`); err == nil {
+		for skRows.Next() {
+			var eid int64
+			var so skillOut
+			if skRows.Scan(&eid, &so.id, &so.name, &so.status) == nil {
+				skillByExec[eid] = so
+			}
+		}
+		skRows.Close()
+	}
+
+	// 所有辅助查询已完成，现在才打开主查询（占用唯一连接直到循环结束）。
 	rows, err := db.Query(`SELECT e.id, e.task_intent, e.task_title, e.status,
 		COALESCE(e.completion_signal,''), e.started_at, e.ended_at
 		FROM executions e WHERE e.user_id = ? ORDER BY e.id`, uid)
@@ -187,22 +232,15 @@ func loadTimeline(uid int64) []pathNode {
 		}
 		n.Exported = sig.Exported
 
-		db.QueryRow(`SELECT COUNT(*) FROM execution_steps WHERE execution_id = ?`, n.ExecutionID).
-			Scan(&n.StepCount)
-		db.QueryRow(`SELECT COUNT(*) FROM execution_steps WHERE execution_id = ?
-			AND step_type = ? AND user_choice != ''`, n.ExecutionID, StepUserDecision).
-			Scan(&n.DecisionCount)
+		n.StepCount = stepCounts[n.ExecutionID]
+		n.DecisionCount = decisionCounts[n.ExecutionID]
 
 		// 这次执行有没有固化成 Skill —— 这是路径节点最有价值的产出
-		var sid int64
-		var sname, sstatus string
-		if err := db.QueryRow(`SELECT s.id, s.name, COALESCE(s.status,'') FROM skill_versions v
-			JOIN skills s ON s.id = v.skill_id
-			WHERE v.source_execution_id = ? ORDER BY v.id LIMIT 1`, n.ExecutionID).
-			Scan(&sid, &sname, &sstatus); err == nil {
+		if so, ok := skillByExec[n.ExecutionID]; ok {
+			sid := so.id
 			n.SkillID = &sid
-			n.SkillName = sname
-			n.SkillStatus = sstatus
+			n.SkillName = so.name
+			n.SkillStatus = so.status
 		}
 		nodes = append(nodes, n)
 	}
@@ -328,6 +366,33 @@ func loadCapabilityAssets(uid int64, isSelf bool) []gin.H {
 	if isSelf {
 		statusFilter = ""
 	}
+	// 单连接模式下唯一连接被主查询 rows 占用后不能再查库，所以先把计数预取到内存 map，
+	// 主查询必须在所有辅助查询完成之后再打开。
+	decisionCounts := map[int64]int{}
+	if dr, err := db.Query(`SELECT skill_id, COUNT(*) FROM decisions
+		WHERE invalidated_at IS NULL GROUP BY skill_id`); err == nil {
+		for dr.Next() {
+			var sid int64
+			var n int
+			if dr.Scan(&sid, &n) == nil {
+				decisionCounts[sid] = n
+			}
+		}
+		dr.Close()
+	}
+	callCounts := map[int64]int{}
+	if cr, err := db.Query(`SELECT v.skill_id, COUNT(*) FROM executions e
+		JOIN skill_versions v ON v.id = e.skill_version_id GROUP BY v.skill_id`); err == nil {
+		for cr.Next() {
+			var sid int64
+			var n int
+			if cr.Scan(&sid, &n) == nil {
+				callCounts[sid] = n
+			}
+		}
+		cr.Close()
+	}
+
 	rows, err := db.Query(`SELECT s.id, s.name, COALESCE(s.status,''), COALESCE(s.task_intent,''),
 		COALESCE(v.version,''), COALESCE(v.distillation_score,0), COALESCE(sc.quality_score,0)
 		FROM skills s
@@ -348,11 +413,8 @@ func loadCapabilityAssets(uid int64, isSelf bool) []gin.H {
 		if rows.Scan(&id, &name, &status, &intent, &version, &distill, &quality) != nil {
 			continue
 		}
-		var decisionCount, callCount int
-		db.QueryRow(`SELECT COUNT(*) FROM decisions WHERE skill_id = ? AND invalidated_at IS NULL`, id).
-			Scan(&decisionCount)
-		db.QueryRow(`SELECT COUNT(*) FROM executions WHERE skill_version_id IN
-			(SELECT id FROM skill_versions WHERE skill_id = ?)`, id).Scan(&callCount)
+		decisionCount := decisionCounts[id]
+		callCount := callCounts[id]
 
 		out = append(out, gin.H{
 			"skill_id":            id,
