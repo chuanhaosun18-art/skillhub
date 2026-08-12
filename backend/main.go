@@ -8,6 +8,7 @@ import (
 )
 
 func main() {
+	loadLocalEnv()
 	initDB()
 	initPersonaSchema()
 	initChatSchema()
@@ -97,6 +98,7 @@ func main() {
 	{
 		// F1 目标识别与四筛判定（伪需求在这里被拦住，不进任务流）
 		growth.POST("/goals/interpret", authMiddleware(), interpretGoal)
+		growth.POST("/wow/discuss", authMiddleware(), wowDiscuss)
 
 		// F4 任务工作台：所有执行必须落 execution_steps
 		growth.POST("/executions", authMiddleware(), createExecution)

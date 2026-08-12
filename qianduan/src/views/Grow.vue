@@ -33,6 +33,14 @@
       </div>
     </section>
 
+    <!-- 探索：还没到抉择，先试小事 -->
+    <section v-if="res && res.mode === 'explore'" class="card">
+      <h3>先试一件小事</h3>
+      <p v-if="res.heard" class="pos">听到的是：{{ res.heard }}</p>
+      <p>{{ res.reply || res.message }}</p>
+      <el-button type="primary" plain @click="goForum">去许愿池挂一个</el-button>
+    </section>
+
     <!-- 编排态：长周期方向性需求的出口。不承诺结果，但给编排 -->
     <section v-if="res && res.mode === 'orchestration'" class="card orch">
       <h3>这件事我不做成一次任务，我给你排接下来几周</h3>

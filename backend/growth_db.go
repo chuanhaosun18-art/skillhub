@@ -597,6 +597,7 @@ CREATE INDEX IF NOT EXISTS idx_corpus_intent ON description_corpus(task_intent);
 
 	seedCorpus()
 	seedPaths()
+	initWowChatSchema()
 	log.Println("growth schema initialized")
 }
 

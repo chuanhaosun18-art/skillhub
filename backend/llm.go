@@ -108,10 +108,15 @@ type chatMsg struct {
 	Content string `json:"content"`
 }
 
+type chatFmt struct {
+	Type string `json:"type"`
+}
+
 type chatReq struct {
-	Model       string    `json:"model"`
-	Messages    []chatMsg `json:"messages"`
-	Temperature float64   `json:"temperature"`
+	Model          string    `json:"model"`
+	Messages       []chatMsg `json:"messages"`
+	Temperature    float64   `json:"temperature"`
+	ResponseFormat *chatFmt  `json:"response_format,omitempty"`
 }
 
 type chatResp struct {
@@ -142,15 +147,23 @@ func callGuideDeepSeek(ctx context.Context, messages []chatMsg) (string, error) 
 
 // callDeepSeekWithKey 调用 DeepSeek 对话补全接口（key 来源由 env 指定）
 func callDeepSeekWithKey(ctx context.Context, messages []chatMsg, env string) (string, error) {
+	return callDeepSeekKeyTemp(ctx, messages, env, 0.7, false)
+}
+
+func callDeepSeekKeyTemp(ctx context.Context, messages []chatMsg, env string, temp float64, jsonMode bool) (string, error) {
 	apiKey := os.Getenv(env)
 	if apiKey == "" {
 		return "", fmt.Errorf("%s 未配置", env)
 	}
-	body, _ := json.Marshal(chatReq{
+	reqBody := chatReq{
 		Model:       deepseekModel,
 		Messages:    messages,
-		Temperature: 0.7,
-	})
+		Temperature: temp,
+	}
+	if jsonMode {
+		reqBody.ResponseFormat = &chatFmt{Type: "json_object"}
+	}
+	body, _ := json.Marshal(reqBody)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, deepseekURL, bytes.NewReader(body))
 	if err != nil {
 		return "", err

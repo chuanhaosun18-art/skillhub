@@ -106,6 +106,266 @@ function mockDelay(data, ms) {
 }
 
 /* 关键词 → 阶段（mock 和真实模式共用：后端不管阶段概念，阶段是前端产品层的路由） */
+function looksRomance(t) {
+  t = t || '';
+  if (looksFriendship(t) && !/恋爱|表白|暗恋|分手|在一起|该不该谈/.test(t)) return false;
+  return /恋爱|表白|暗恋|分手|在一起|对象|该不该谈/.test(t) ||
+    (/好感/.test(t) && !/交朋友|没朋友|孤独/.test(t)) ||
+    (/喜欢/.test(t) && /他|她|一个人|同学/.test(t) && !/交朋友/.test(t));
+}
+function looksFriendship(t) {
+  t = t || '';
+  if (/恋爱|表白|暗恋|分手|该不该谈|在一起/.test(t) && !/交朋友|没朋友|孤独|社恐/.test(t)) return false;
+  return /交朋友|没朋友|一个朋友|没有朋友|孤独|社恐|搭子|认识人|社交从零|想有朋友/.test(t);
+}
+function guessJunction(t) {
+  if (looksFriendship(t)) return 'j-friend';
+  if (looksRomance(t)) return 'j-love';
+  if (/转专业|专业合不合适|适不适合这个专业/.test(t)) return 'j-major';
+  if (/高考|报志愿|本省|外省|复读|择校/.test(t)) return 'j-y0';
+  if (/毕业|offer|gap|延毕/.test(t)) return 'j-y4';
+  return 'j-y3';
+}
+
+function looksReadyForTask(t) {
+  t = t || '';
+  if (/该不该|要不要选|值不值得|选哪一边|纠结要不要/.test(t) && !/怎么做|该怎么|应该怎么|怎么开始|怎么交|怎么开口/.test(t)) return false;
+  return /我想做|帮我做|帮我写|帮我准备|帮我弄|开始做|怎么做|该怎么|应该怎么|我该怎么|怎么开始|怎么交|怎么开口|怎么认识|具体怎么|第一步|怎么准备|接下来怎么|有没有卡|装载|动手|试一张|匹配|教我|带我做|我想试试|我想开始|开始准备/.test(t);
+}
+
+function forkPack(id) {
+  var j = id && typeof DB !== 'undefined' && DB.junctions[id];
+  if (!j) return null;
+  return {
+    title: j.title, total: j.total, source: j.source, switch_note: j.switchNote,
+    branches: (j.branches || []).map(function (b) {
+      return {
+        name: b.name,
+        count: b.count,
+        quotes: (b.quotes || []).map(function (q) { return (q.t || '') + (q.by ? ' —— ' + q.by : ''); })
+      };
+    })
+  };
+}
+
+function localForkTalk(route, utterance) {
+  var ctx = retrieveWowLocal(utterance, route, []);
+  var jid = (route && route.junctionId) || guessJunction(utterance);
+  var j = jid && DB.junctions[jid];
+  var heard = (utterance || '').replace(/\s+/g, ' ').slice(0, 36);
+  var lines = '听到你说「' + heard + '」。这类选择我不选边，也不把整张分叉表念一遍。';
+  if (j) {
+    lines += '\n\n和这件事对上的入口是「' + j.title + '」，' + j.total + ' 人走过。';
+    var exp = ctx.experiences && ctx.experiences[0];
+    if (exp && exp.quote) lines += '\n有人说过：' + exp.quote;
+    if (j.switchNote) lines += '\n' + j.switchNote;
+  }
+  lines += '\n\n我先把这句话记下。你现在更卡的是哪一块，接着说就行。';
+  return lines;
+}
+
+function looksLikeForkDump(text, forks) {
+  text = text || '';
+  if (/只把走过的人摊开/.test(text) || /你现在更卡哪一块/.test(text)) return true;
+  if (/这批里共/.test(text) && /人：/.test(text)) return true;
+  if (!forks || !forks.branches || forks.branches.length < 2) return false;
+  var n = 0;
+  forks.branches.forEach(function (b) {
+    if (b.name && text.indexOf(b.name) >= 0) n++;
+  });
+  return n >= Math.min(3, forks.branches.length);
+}
+
+function localFollowupTalk(route, utterance, history) {
+  var t = (utterance || '').trim();
+  var prevUser = (history || []).filter(function (h) { return h && h.role === 'user' && h.content; })
+    .map(function (h) { return h.content; });
+  if (route && route.memory && route.memory.situation && prevUser.indexOf(route.memory.situation) < 0) {
+    prevUser.unshift(route.memory.situation);
+  }
+  var jid = (route && route.junctionId) || (route && route.memory && route.memory.junction_id) || guessJunction(t);
+  var j = jid && typeof DB !== 'undefined' && DB.junctions[jid];
+  var head = '你前面说的是「' + ((prevUser[0] || (route && route.heard) || '').replace(/\s+/g, ' ').slice(0, 24)) +
+    '」，现在问「' + t.slice(0, 24) + '」。我不选边，整张表也不再贴。';
+  if (!j) return head + '\n接着说现在最卡住的那一点就行。';
+  var scored = (j.branches || []).map(function (b) {
+    var bl = b.name + ' ' + (b.quotes || []).map(function (q) { return (q.t || '') + ' ' + (q.by || ''); }).join(' ');
+    var s = 0;
+    if (/学业|课业|成绩|绩点|学习|这学期|考试|余量|影响/.test(t)) {
+      if (/稳住|学期|课业/.test(b.name + bl)) s += 8;
+      if (/余量/.test(bl)) s += 4;
+      if (/排时间|乱/.test(bl)) s += 2;
+    }
+    if (/朋友|关系|弄没|开口|说出口|表白/.test(t) && /朋友|开口|说/.test(bl)) s += 5;
+    if (/开始|在一起|处起来/.test(t) && /开始|处/.test(b.name)) s += 4;
+    t.replace(/[，。？！、,.!?]/g, ' ').split(/\s+/).forEach(function (w) {
+      if (w.length >= 2 && bl.indexOf(w) >= 0) s += 1;
+    });
+    return { b: b, s: s };
+  }).sort(function (a, b) { return b.s - a.s; });
+  var top = scored[0];
+  if (!top || top.s <= 0) {
+    return head + '\n完整分叉刚才已经摊过。你更想看哪一块的代价，说一块就行。';
+  }
+  var b = top.b;
+  var q0 = b.quotes && b.quotes[0];
+  var lines = head + '\n\n' + j.total + ' 人里，和这一问最相关的是「' + b.name + '」· ' + b.count + ' 人。';
+  if (q0) lines += '\n有人说过：「' + q0.t + '」——' + q0.by;
+  if (/学业|课业|成绩|这学期|时间|影响/.test(t) && j.switchNote) lines += '\n' + j.switchNote;
+  var second = scored[1];
+  if (second && second.s > 0) {
+    var q1 = second.b.quotes && second.b.quotes[0];
+    lines += '\n另一头「' + second.b.name + '」有 ' + second.b.count + ' 人' +
+      (q1 ? '，原话是：「' + q1.t + '」' : '。');
+  }
+  lines += '\n\n要动手了就直接说「我该怎么做」，我去匹配能帮你做完的卡。';
+  return lines;
+}
+
+function discussLocalReply(utterance, route, history, next) {
+  if (next === 'match') return localTaskTalk(route, utterance);
+  var follow = (history && history.length) || (route && route.memory && route.memory.situation);
+  if (follow) return localFollowupTalk(route, utterance, history);
+  return localForkTalk(route, utterance);
+}
+
+function retrieveWowLocal(utterance, route, history) {
+  var blob = (utterance || '') + ' ' + ((route && route.heard) || '');
+  (history || []).forEach(function (t) { if (t && t.content) blob += ' ' + t.content; });
+  var jid = (route && route.junctionId) || guessJunction(blob);
+  var j = jid && DB.junctions[jid];
+  var experiences = [];
+  var junctions = [];
+  if (j) {
+    junctions.push({ id: j.id, title: j.title, total: j.total });
+    (j.branches || []).forEach(function (b) {
+      (b.quotes || []).forEach(function (q) {
+        var s = 0;
+        if (/学业|课业|成绩|这学期|余量|时间/.test(utterance) && /学期|稳住|余量|时间|乱/.test(b.name + (q.t || ''))) s += 5;
+        if (s === 0) s = 1;
+        experiences.push({ score: s, junction_id: j.id, branch: b.name, quote: '「' + q.t + '」——' + q.by, count: b.count });
+      });
+    });
+    experiences.sort(function (a, b) { return b.score - a.score; });
+    experiences = experiences.slice(0, 3);
+  }
+  var skills = [];
+  var ids = (j && j.relatedSkills) || [];
+  ids.forEach(function (id) {
+    var s = DB.skills[id];
+    if (s) skills.push({ id: s.id, title: s.title, subtitle: s.subtitle, boundary: s.boundary || '' });
+  });
+  return { junctions: junctions, experiences: experiences, skills: skills };
+}
+
+function mergeWowMemoryLocal(prev, utterance, route, next) {
+  prev = prev || {};
+  var facts = (prev.facts || []).slice();
+  var bit = (utterance || '').replace(/\s+/g, ' ').slice(0, 40);
+  if (bit && facts.indexOf(bit) < 0) facts.push(bit);
+  if (facts.length > 8) facts = facts.slice(-8);
+  return {
+    situation: prev.situation || ((route && route.heard) || bit),
+    facts: facts,
+    constraints: prev.constraints || [],
+    junction_id: prev.junction_id || (route && route.junctionId) || '',
+    task: next === 'match' ? bit : (prev.task || ''),
+    open_question: prev.open_question || ''
+  };
+}
+
+function packDiscussResult(utterance, route, history, next, live, extra) {
+  extra = extra || {};
+  var ctx = extra.context || retrieveWowLocal(utterance, route, history);
+  var memory = extra.memory || mergeWowMemoryLocal(route && route.memory, utterance, route, next);
+  return {
+    reply: extra.reply || discussLocalReply(utterance, route, history, next),
+    type: extra.type || (route && route.type) || 'explore',
+    next: next,
+    live: !!live,
+    sessionId: extra.sessionId || 0,
+    memory: memory,
+    context: ctx,
+    junctionId: (memory && memory.junction_id) || (route && route.junctionId) || extra.junctionId,
+    topic: extra.topic || '',
+    degraded: !!extra.degraded
+  };
+}
+
+function localTaskTalk(route, utterance) {
+  var heard = utterance || (route && route.heard) || '';
+  return '听到你要动手了：「' + heard.replace(/\s+/g, ' ').slice(0, 36) + '」。不讨论该不该了，去匹配一张能帮你把这件事做完的卡——没有就不编。';
+}
+
+function localRouteIntent(text) {
+  var t = text || '';
+  var heard = t.replace(/\s+/g, '').slice(0, 20);
+  var res;
+  if (/撑不住|崩溃|活不下去|想不开|被伤害|想逃|自杀|重度焦虑/.test(t) ||
+      ((/好累|难受|emo/.test(t)) && /撑|崩|逃|一直/.test(t))) {
+    res = { type: 'emotion', stageId: null, junctionId: null,
+      heard: heard,
+      reply: '听到了。你说的是「' + heard + '」——这句话不需要被解决，也不会变成任何数据。\n如果只是累，歇一会儿再来。如果这种感觉持续了一段时间，校心理支持中心（工作日 8:30–17:30）比任何流程都合适。' };
+  } else if (/该不该|要不要|值不值得|选哪|纠结|不知道该/.test(t) ||
+      (/还是/.test(t) && /保研|考研|就业|出国|转|考公|工作|实习|本省|外省/.test(t))) {
+    res = { type: 'decide', stageId: null, junctionId: guessJunction(t), heard: heard,
+      reply: '你卡在「' + heard + '」。我不会替你选边——这类选择没有「做对了」的标准。\n我能给的是走过这个路口的人去了哪、付出了什么。' };
+  } else if (/我决定|已经决定|已经想好|定了|接下来怎么准备|怎么排/.test(t) && !/该不该|要不要/.test(t)) {
+    res = { type: 'action', stageId: null, junctionId: null, orchIntent: guessOrch(t), heard: heard,
+      reply: '听到你已经定了方向（「' + heard + '」）。那就不试了，按别人真走完的路排接下来几周——不承诺结果。' };
+  } else {
+    res = { type: 'explore', stageId: guessStage(t),
+      junctionId: (looksFriendship(t) || looksRomance(t)) ? guessJunction(t) : null, heard: heard,
+      reply: '听到的是：「' + heard + '」。这还不是「该不该」的题，也先不用选边。我们从一件能试的小事开始。' };
+  }
+  return res;
+}
+
+function mapInterpret(text, r) {
+  var exit = r.route_exit;
+  if (exit !== 'explore' && exit !== 'decide' && exit !== 'action' && exit !== 'emotion') {
+    if (r.mode === 'rejected' && r.task_intent === 'emotional_support') exit = 'emotion';
+    else if (r.mode === 'rejected') exit = 'decide';
+    else if (r.mode === 'orchestration') exit = 'action';
+    else exit = 'explore';
+  }
+  var crisis = /撑不住|崩溃|活不下去|想不开|被伤害|想逃|自杀|重度焦虑/.test(text);
+  var asking = /该不该|要不要|值不值得|选哪|纠结|不知道该/.test(text) ||
+    (/恋爱|好感|表白|在一起/.test(text) && !/撑不住|崩溃/.test(text) && /该不该|要不要|到底/.test(text));
+  if (exit === 'emotion' && !crisis && asking) {
+    exit = 'decide';
+    if (!r.junction_id) r.junction_id = guessJunction(text);
+    if (!r.reply || /心理支持|挺不好过|帮不上|该不该谈/.test(r.reply || r.response || '')) {
+      r.reply = looksFriendship(text)
+        ? '你卡在「怎么开始有朋友」这一类处境上。这不是谈恋爱，我也不会把两件事混在一起。'
+        : '你卡在「该不该谈」这一类选择上。有好感不是危机，我也不会替你选边——没有做对了的标准。我能给的是走过这个路口的人后来怎么选的。';
+    }
+  }
+  var reply = r.reply || r.response || r.message || r.clarify_question || '';
+  if (!reply && r.task_card) {
+    reply = (r.heard ? '听到的是：「' + r.heard + '」。\n' : '') +
+      (r.task_card.next_step ? '可以先做：' + r.task_card.next_step : '先从一件能试的小事开始。');
+  }
+  var out = {
+    type: exit,
+    stageId: r.stage_id || guessStage(text),
+    junctionId: r.junction_id || ((exit === 'decide' || looksFriendship(text) || looksRomance(text)) ? guessJunction(text) : null),
+    orchIntent: r.orchestration_intent || (exit === 'action' ? guessOrch(text) : ''),
+    heard: r.heard || '',
+    reply: reply,
+    live: true,
+    raw: r
+  };
+  if (exit === 'emotion' && r.resources && r.resources.length && reply.indexOf('心理') < 0) {
+    var extra = r.resources.map(function (x) {
+      if (typeof x === 'string') return x;
+      return [x.label, x.hint].filter(Boolean).join(' · ');
+    }).join('\n');
+    if (extra) out.reply = (out.reply ? out.reply + '\n' : '') + extra;
+  }
+  return out;
+}
+
 function guessOrch(t) {
   if (/保研/.test(t)) return 'postgrad_recommend';
   if (/考研/.test(t)) return 'postgrad_exam';
@@ -230,57 +490,13 @@ var WowAPI = {
     var useLive = !WowConfig.USE_MOCK && WowConfig.TOKEN;
     if (useLive) {
       return wowPost('/growth/goals/interpret', { utterance: text }).then(function (r) {
-        var out = { type: 'explore', stageId: null, junctionId: null, reply: '', raw: r };
-        if (r.mode === 'rejected' && r.task_intent === 'emotional_support') {
-          out.type = 'emotion';
-          out.reply = (r.response || '') +
-            (r.resources && r.resources.length ? '\n' + r.resources.join('\n') : '');
-        } else if (r.mode === 'rejected') {
-          out.type = 'decide';
-          out.junctionId = /转专业/.test(text) ? 'j-major'
-            : (/高考|报志愿|本省|外省/.test(text) ? 'j-y0'
-            : (/毕业|offer/.test(text) ? 'j-y4' : 'j-y3'));
-          out.reply = r.response || r.reason || '这个问题不给答案，给你看别人走过的分支。';
-        } else if (r.mode === 'orchestration') {
-          out.type = 'action';
-          out.orchIntent = r.orchestration_intent || guessOrch(text);
-          out.reply = r.message || '方向已定，接下来进编排态。';
-        } else if (r.mode === 'task') {
-          out.type = 'explore';
-          out.stageId = guessStage(text);
-          out.reply = r.task_card
-            ? '识别为任务：' + r.task_card.task_label + '\n下一步：' + r.task_card.next_step
-            : '已识别为可执行任务。';
-        } else if (r.mode === 'clarify') {
-          out.reply = r.clarify_question;
-          out.stageId = guessStage(text);
-        } else { /* manual_fallback / not_skillable */
-          out.reply = r.message || '先从对应阶段的小事开始。';
-          out.stageId = guessStage(text);
-        }
-        out.live = true;
-        return out;
+        return mapInterpret(text, r);
       });
     }
-    var t = text || '';
-    var res;
-    if (/累|崩溃|撑不住|难受|emo|哭|焦虑得|睡不着/.test(t)) {
-      res = { type: 'emotion', stageId: null, junctionId: null,
-        reply: '听到了。这句话不需要被"解决"，也不会被记录、不会变成任何数据。\n如果只是累，歇一会儿再来，卡都在。如果这种感觉持续了一段时间，这里是校心理支持中心的预约方式（工作日 8:30–17:30 · 大学生活动中心 214）——他们比任何 AI 都专业。💛' };
-    } else if (/该不该|要不要|还是.*好|值不值得|选哪/.test(t)) {
-      var junc = /转专业/.test(t) ? 'j-major' : (/高考|报志愿|本省|外省/.test(t) ? 'j-y0' : (/毕业|offer/.test(t) ? 'j-y4' : 'j-y3'));
-      res = { type: 'decide', stageId: null, junctionId: junc,
-        reply: '这个问题我不会替你答——它没有"做对了"的标准答案，谁给你答案谁是在算命。\n但我可以给你比答案更有用的东西：走过这个路口的人，各自去了哪、付出了什么。' };
-    } else if (/决定|已经想好|定了/.test(t)) {
-      res = { type: 'action', stageId: null, junctionId: null, orchIntent: guessOrch(t),
-        reply: '好，那就不试了，直接排节奏。编排只用别人真走完的 Path，绝不凭空生成。' };
-    } else {
-      res = { type: 'explore', stageId: guessStage(t), junctionId: null,
-        reply: '那我们先不聊"选择"，先找几件值得试的小事。\n我把你的处境路由到了对应阶段——那里的每个任务背后，都是真人走过并验证过的 Skill。' };
-    }
+    var res = localRouteIntent(text);
     res.live = false;
     res.needLogin = !WowConfig.TOKEN && !WowConfig.USE_MOCK;
-    return mockDelay(res, 700);
+    return mockDelay(res, 500);
   },
 
   /* ----------------------------------------------------------
@@ -451,7 +667,13 @@ var WowAPI = {
             title: s.name, subtitle: s.description || '',
             type: s.category || 'Skill', stageId: null,
             price: 0, days: 0, duration: '—',
-            creator: { name: s.owner_name || s.username || '平台用户', tag: 'v' + (s.version || '1.0') },
+            creator: {
+              name: s.owner_name || s.username || '平台用户',
+              tag: 'v' + (s.version || '1.0'),
+              meta: 'v' + (s.version || '1.0'),
+              color: '#5b5bd6',
+              initial: String(s.owner_name || s.username || '平').slice(0, 1)
+            },
             trigger: '', script: '', judge: '', boundary: s.description || '',
             fromBackend: true
           };
@@ -486,7 +708,13 @@ var WowAPI = {
         DB.skills[id] = {
           id: id, backendId: s.id, title: s.name, subtitle: s.description || '',
           type: s.category || 'Skill', stageId: null, price: 0, days: 0, duration: '—',
-          creator: { name: s.owner_name || '平台用户', tag: 'v' + (s.version || '1.0') },
+          creator: {
+            name: s.owner_name || '平台用户',
+            tag: 'v' + (s.version || '1.0'),
+            meta: 'v' + (s.version || '1.0'),
+            color: '#5b5bd6',
+            initial: String(s.owner_name || '平').slice(0, 1)
+          },
           trigger: '', script: '', judge: '', boundary: '', fromBackend: true,
           files: s.files || []
         };
@@ -602,5 +830,37 @@ var WowAPI = {
     return ensureLogin().then(function () {
       return wowPost('/forum/topics/' + id + '/like').then(function (d) { return d.data || d; });
     });
+  },
+
+  /* 多轮对话：服务端会话记忆 + 检索经验/入口/Skill */
+  discuss: function (utterance, route, history, forks, sessionId) {
+    var local = function () {
+      var next = looksReadyForTask(utterance) ? 'match' : 'talk';
+      return packDiscussResult(utterance, route, history, next, false, {});
+    };
+    if (!WowConfig.TOKEN) return Promise.resolve(local());
+    return wowPost('/growth/wow/discuss', {
+      session_id: sessionId || 0,
+      utterance: utterance,
+      history: history || [],
+      forks: forks || null
+    }).then(function (r) {
+      var next = r.next || 'talk';
+      if (r.degraded && looksReadyForTask(utterance)) next = 'match';
+      var reply = r.reply || discussLocalReply(utterance, route, history, next);
+      if (next !== 'match' && looksLikeForkDump(reply, forks)) {
+        reply = discussLocalReply(utterance, route, history, next);
+      }
+      return packDiscussResult(utterance, route, history, next, !r.degraded, {
+        reply: reply,
+        type: r.route_exit || (route && route.type) || 'explore',
+        sessionId: r.session_id,
+        memory: r.memory,
+        context: r.context,
+        junctionId: r.memory && r.memory.junction_id,
+        topic: r.topic,
+        degraded: r.degraded
+      });
+    }).catch(function () { return local(); });
   }
 };

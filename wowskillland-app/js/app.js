@@ -47,6 +47,13 @@ restoreWished();
 /* ---------------- 工具 ---------------- */
 function $(s, root) { return (root || document).querySelector(s); }
 function $all(s, root) { return Array.prototype.slice.call((root || document).querySelectorAll(s)); }
+function stageOf(id) {
+  if (!id || !DB.stages) return null;
+  for (var i = 0; i < DB.stages.length; i++) {
+    if (DB.stages[i].id === id) return DB.stages[i];
+  }
+  return null;
+}
 function esc(str) {
   return String(str == null ? '' : str).replace(/[&<>"']/g, function (c) {
     return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
@@ -142,6 +149,8 @@ function skillChipHtml(id) {
   return '<span class="skill-chip" data-goskill="' + s.id + '">🃏 ' + esc(s.title) + ' ' + tag + '</span>';
 }
 function skillCardHtml(s) {
+  if (!s) return '';
+  var creator = s.creator || {};
   var price = s.price > 0
     ? '<span class="price-tag coin">🪙 ' + s.price + '</span>'
     : '<span class="price-tag free">免费</span>';
@@ -149,14 +158,15 @@ function skillCardHtml(s) {
   var proofBadge = s.verify
     ? '<span class="badge green">✓ ' + s.verify.pass + '/' + s.verify.total + ' 验证</span>'
     : (s.real ? '<span class="badge ink">⭐ GitHub 开源</span>' : '');
+  var initial = creator.initial || String(creator.name || '?').slice(0, 1);
   return '<div class="skill-card" data-goskill="' + s.id + '">' +
-    '<div class="k-top"><span class="badge violet">' + esc(s.type) + '</span>' +
+    '<div class="k-top"><span class="badge violet">' + esc(s.type || 'Skill') + '</span>' +
     '<span class="badge amber">' + (st ? st.short : '') + '</span>' +
     proofBadge + '</div>' +
     '<h3>' + esc(s.title) + '</h3>' +
     '<div class="k-sub">' + esc(s.subtitle) + '</div>' +
-    '<div class="k-meta"><span class="k-creator"><span class="k-ava" style="background:' + s.creator.color + '">' +
-    esc(s.creator.initial) + '</span>' + esc(s.creator.name) + ' · ' + esc(s.creator.meta) + '</span>' + price + '</div></div>';
+    '<div class="k-meta"><span class="k-creator"><span class="k-ava" style="background:' + (creator.color || '#5b5bd6') + '">' +
+    esc(initial) + '</span>' + esc(creator.name || '匿名') + ' · ' + esc(creator.meta || creator.tag || '') + '</span>' + price + '</div></div>';
 }
 function bindSkillLinks(root) {
   $all('[data-goskill]', root).forEach(function (el) {
@@ -172,6 +182,9 @@ function bindSkillLinks(root) {
  * ============================================================ */
 var lastQuery = '';
 var lastRoute = null;
+var homeChat = [];
+var homeBusy = false;
+var wowSessionId = 0;
 var exploreState = { step: 0, answers: {}, query: '', stageId: 'y1' };
 var EXPLORE_Q = [
   { key: 'hours', q: '你每周大概有多少能自己支配的时间？', opts: ['几乎没有', '5–10 小时', '10–15 小时', '比较多'] },
@@ -184,6 +197,65 @@ function junctionList() {
 function skillsOfStage(stageId) {
   return Object.keys(DB.skills).map(function (k) { return DB.skills[k]; })
     .filter(function (s) { return s.stageId === stageId; });
+}
+function queryTokens(q) {
+  var t = q || '';
+  var extra = [];
+  if (/交朋友|没朋友|孤独|社恐|搭子/.test(t)) extra = extra.concat(['破冰', '搭子', '朋友', '社交', '开口', '食堂']);
+  if (/恋爱|表白|分手|暗恋|对象|在一起/.test(t) || (/好感/.test(t) && !/交朋友|孤独/.test(t))) extra = extra.concat(['好感', '表白']);
+  if (/转专业/.test(t)) extra = extra.concat(['转专业', '旁听', '专业']);
+  if (/保研|推免|夏令营/.test(t)) extra = extra.concat(['保研', '夏令营', '材料']);
+  if (/就业|求职|实习|秋招|简历/.test(t)) extra = extra.concat(['简历', '实习', '秋招']);
+  if (/考研/.test(t)) extra = extra.concat(['考研']);
+  if (/宿舍|室友/.test(t)) extra = extra.concat(['宿舍', '边界']);
+  if (/论文|选题/.test(t)) extra = extra.concat(['论文', '选题']);
+  var raw = t.replace(/[，。？！、,.!?]/g, ' ').split(/\s+/).filter(function (x) { return x.length >= 2; });
+  return raw.concat(extra);
+}
+function matchTaskLabel() {
+  var mem = lastRoute && lastRoute.memory;
+  if (mem && mem.task) return mem.task;
+  if (mem && mem.situation) return mem.situation;
+  return lastQuery || (lastRoute && lastRoute.heard) || '';
+}
+function matchSearchBlob() {
+  var mem = lastRoute && lastRoute.memory;
+  return [
+    lastQuery,
+    lastRoute && lastRoute.heard,
+    lastRoute && lastRoute.topic,
+    mem && mem.task,
+    mem && mem.situation,
+    mem && mem.junction_id,
+    ((mem && mem.facts) || []).join(' ')
+  ].filter(Boolean).join(' ');
+}
+function matchSkills(query) {
+  var tokens = queryTokens(matchSearchBlob() || query);
+  var seen = {};
+  var out = [];
+  var jid = lastRoute && lastRoute.junctionId;
+  if (jid && DB.junctions[jid] && DB.junctions[jid].relatedSkills) {
+    DB.junctions[jid].relatedSkills.forEach(function (id) {
+      if (DB.skills[id] && !seen[id]) { seen[id] = true; out.push(DB.skills[id]); }
+    });
+  }
+  var scored = Object.keys(DB.skills).map(function (k) { return DB.skills[k]; })
+    .filter(function (s) { return s && s.title && !seen[s.id]; })
+    .map(function (s) {
+      var blob = [s.title, s.subtitle, s.match, s.trigger, s.story, s.boundary, s.judge].join(' ');
+      var score = 0;
+      tokens.forEach(function (tok) { if (tok && blob.indexOf(tok) >= 0) score++; });
+      return { s: s, score: score };
+    })
+    .filter(function (x) { return x.score > 0; })
+    .sort(function (a, b) { return b.score - a.score; });
+  scored.forEach(function (x) {
+    if (out.length >= 6) return;
+    seen[x.s.id] = true;
+    out.push(x.s);
+  });
+  return out;
 }
 function rerouteHtml() {
   return '<div class="reroute">判错了？一键改道：' +
@@ -221,86 +293,184 @@ function goAfterRoute(res) {
 }
 
 function viewHome() {
-  var pathHtml = junctionList().map(function (j) {
-    return '<a class="path-card" href="#/junction/' + j.id + '">' +
-      '<div class="pc-k">路口</div><h3>' + esc(j.title) + '</h3>' +
-      '<div class="pc-n">' + j.total + ' 人走过 · 只给人数</div></a>';
-  }).join('');
-  var stagesHtml = DB.stages.map(function (st) {
-    return '<a class="stage-pill" href="#/stage/' + st.id + '">' + st.emoji + ' ' + esc(st.short) + '</a>';
-  }).join('');
-
-  return '<div class="view">' +
-    '<div class="hero">' +
-    '<h1>每一次<span class="hl">"我不知道"</span>，都有人真走过。</h1>' +
-    '<div class="sub">不测评 · 不建议 · 不承诺。说一句现在的不知道，我们只负责把你送到对的出口。</div>' +
-    '<div class="hero-input"><input id="home-input" placeholder="说说你现在的不知道……" enterkeyhint="go">' +
-    '<button class="btn-main" id="home-send">出发</button></div>' +
-    '<div class="hero-chips">' +
+  return '<div class="view home-wrap">' +
+    '<div class="home-chat">' +
+    '<div class="home-intro"><h1>说说你现在的<span class="hl">不知道</span></h1>' +
+    '<p>不测评 · 不建议 · 不承诺。先把「不知道」聊清楚；真要动手了，再匹配能帮你做完的 Skill。</p>' +
+    '<div class="home-chips" id="home-chips">' +
     '<button class="chip-btn" data-q="我大一，一个朋友都没有，很孤独">大一很孤独</button>' +
     '<button class="chip-btn" data-q="我大二，不知道该不该转专业">该不该转专业</button>' +
     '<button class="chip-btn" data-q="我大三，不知道该保研还是就业">保研还是就业</button>' +
     '<button class="chip-btn" data-q="我决定保研了，接下来怎么准备">我决定保研了</button>' +
-    '<button class="chip-btn alt" data-q="最近好累，感觉撑不住了">最近好累</button>' +
-    '</div><div class="hero-reply" id="hero-reply"></div></div>' +
-    '<div class="section-title">🛤️ 路口<span class="badge ink">不给建议</span></div>' +
-    '<div class="path-grid">' + pathHtml + '</div>' +
-    '<div class="section-title">按阶段看</div>' +
-    '<div class="stage-pills">' + stagesHtml + '</div>' +
-    '</div>';
+    '<button class="chip-btn alt" data-q="最近好累，感觉撑不住了">最近好累</button></div></div>' +
+    '<div class="home-thread" id="home-thread"></div>' +
+    '<div class="home-composer">' +
+    '<input id="home-input" placeholder="直接说就行……" enterkeyhint="send" autocomplete="off">' +
+    '<button class="btn-main" id="home-send">发送</button></div></div></div>';
 }
-function bindHome(root) {
-  function go(q) {
-    lastQuery = q;
-    var box = $('#hero-reply', root);
-    box.innerHTML = '<div class="reply-bubble">思考中…</div>';
-    WowAPI.routeIntent(q, DB.user.stageId).then(function (res) {
-      lastRoute = res;
-      var badge = { explore: ['explore', '探索型 → 先试小事'], decide: ['reject', '抉择型 · 不回答该不该'],
-        action: ['explore', '行动型 → 按走过的路编排'], emotion: ['stop', '已拦截 · 不进任何流'] }[res.type] || ['explore', '已路由'];
-      var btns = '';
-      if (res.type === 'explore') btns += '<button class="btn-main btn-sm" data-go="explore">开始轻访谈 →</button>';
-      if (res.type === 'decide' && res.junctionId) btns += '<button class="btn-main btn-sm" data-nav-to="#/junction/' + res.junctionId + '">看真实分叉 →</button>';
-      if (res.type === 'action') btns += '<button class="btn-main btn-sm" data-nav-to="#/orch/' + (res.orchIntent || guessOrch(q)) + '">看编排 →</button>';
-      var liveTag = res.live
-        ? '<span class="route-badge explore">DeepSeek 路由</span>'
-        : (res.needLogin ? '<span class="route-badge reject">本地预览 · 登录后走真实 AI</span>' : '');
-      if (res.needLogin) btns += '<button class="btn-main btn-sm" data-nav-to="#/login">登录后重试 →</button>';
-      box.innerHTML = liveTag + '<span class="route-badge ' + badge[0] + '">' + badge[1] + '</span>' +
-        '<div class="reply-bubble">' + nl2br(res.reply) + '</div>' +
-        (res.type !== 'emotion' ? rerouteHtml() : '') +
-        (btns ? '<div class="actions">' + btns + '</div>' : '');
-      $all('[data-nav-to]', box).forEach(function (b) {
-        b.addEventListener('click', function () { location.hash = b.getAttribute('data-nav-to'); });
-      });
-      $all('[data-go]', box).forEach(function (b) {
-        b.addEventListener('click', function () { goAfterRoute(res); });
-      });
-      bindReroute(box);
-    }).catch(function (err) {
-      if (err && err.needLogin) {
-        box.innerHTML = '<div class="reply-bubble">这句话会进真实路由器，先登录一下。</div>' +
-          '<div class="actions"><button class="btn-main btn-sm" data-nav-to="#/login">去登录 →</button></div>';
-        $all('[data-nav-to]', box).forEach(function (b) {
-          b.addEventListener('click', function () { location.hash = b.getAttribute('data-nav-to'); });
-        });
-        return;
-      }
-      box.innerHTML = '<div class="reply-bubble">路由暂时走不通：' + esc(err.message || err) + '</div>';
+function homeRouteMeta(res) {
+  if (res.next === 'match') return ['explore', '要动手了 → 匹配能做完的 Skill'];
+  if (res.topic === 'friendship') return ['explore', '交朋友 · 不是恋爱'];
+  if (res.topic === 'romance') return ['reject', '抉择型 · 不回答该不该'];
+  return { explore: ['explore', '先聊清楚'], decide: ['reject', '抉择型 · 不回答该不该'],
+    action: ['explore', '要动手了 → 匹配能做完的 Skill'], emotion: ['stop', '已拦截 · 不进任何流'] }[res.type] || ['explore', '已路由'];
+}
+function ctxRefsHtml(res) {
+  var ctx = res && res.context;
+  if (!ctx) return '';
+  var bits = [];
+  (ctx.experiences || []).slice(0, 2).forEach(function (e) {
+    var q = (e.quote || '').replace(/^「/, '').replace(/」.*$/, '');
+    if (q) bits.push('<span class="ctx-chip"><i>经验</i>' + esc(q.slice(0, 28)) + (q.length > 28 ? '…' : '') + '</span>');
+  });
+  (ctx.junctions || []).slice(0, 1).forEach(function (j) {
+    if (!j || !j.title) return;
+    var href = j.id ? '#/junction/' + j.id : '#/paths';
+    bits.push('<a class="ctx-chip" href="' + href + '"><i>入口</i>' + esc(j.title) + (j.total ? ' · ' + j.total + ' 人' : '') + '</a>');
+  });
+  if (res.next === 'match') {
+    (ctx.skills || []).slice(0, 2).forEach(function (s) {
+      if (!s || !s.title) return;
+      bits.push('<a class="ctx-chip" href="#/skill/' + s.id + '"><i>Skill</i>' + esc(s.title) + '</a>');
     });
   }
+  if (!bits.length) return '';
+  return '<div class="ctx-refs">' + bits.join('') + '</div>';
+}
+
+function applyDiscuss(res, d) {
+  res.reply = d.reply || res.reply;
+  res.next = d.next || res.next;
+  res.live = d.live || res.live;
+  res.sessionId = d.sessionId;
+  res.memory = d.memory;
+  res.context = d.context;
+  if (d.junctionId) res.junctionId = d.junctionId;
+  if (d.type) res.type = d.type;
+  if (d.topic) res.topic = d.topic;
+  if (d.degraded) res.degraded = true;
+  if (d.sessionId) wowSessionId = d.sessionId;
+  return res;
+}
+function homeRouteBtns(res) {
+  var btns = '';
+  if (!res) return btns;
+  if (res.needLogin) btns += '<button class="btn-main btn-sm" data-nav-to="#/login">登录后继续聊 →</button>';
+  if (res.type === 'emotion') return btns;
+  if (res.next === 'match' || res.type === 'action') {
+    btns += '<button class="btn-main btn-sm" data-nav-to="#/match">去匹配能帮你做完这件事的 Skill →</button>';
+  }
+  return btns;
+}
+function paintHomeThread(root) {
+  var thread = $('#home-thread', root);
+  if (!thread) return;
+  thread.innerHTML = homeChat.map(function (m) {
+    if (m.role === 'me') {
+      return '<div class="msg me"><div class="bubble">' + nl2br(m.text) + '</div></div>';
+    }
+    if (m.thinking) {
+      return '<div class="msg bot"><div class="bubble thinking">在听…</div></div>';
+    }
+    var res = m.route || {};
+    var badge = homeRouteMeta(res);
+    var liveTag = res.live
+      ? '<span class="route-badge explore">多轮对话 · 有记忆</span>'
+      : (res.needLogin ? '<span class="route-badge reject">本地预览 · 登录后走真实 AI</span>' : '<span class="route-badge explore">本地多轮</span>');
+    var btns = homeRouteBtns(res);
+    return '<div class="msg bot">' + liveTag +
+      (res.type ? '<span class="route-badge ' + badge[0] + '">' + badge[1] + '</span>' : '') +
+      (res.memory && res.memory.situation ? '<div class="heard">还记得：' + esc(res.memory.situation) + '</div>' : (res.heard ? '<div class="heard">听到的是：' + esc(res.heard) + '</div>' : '')) +
+      '<div class="bubble">' + nl2br(m.text) + '</div>' +
+      ctxRefsHtml(res) +
+      (btns ? '<div class="actions">' + btns + '</div>' : '') + '</div>';
+  }).join('');
+  thread.scrollTop = thread.scrollHeight;
+  var chips = $('#home-chips', root);
+  if (chips) chips.hidden = homeChat.length > 0;
+  $all('[data-nav-to]', thread).forEach(function (b) {
+    b.addEventListener('click', function () { location.hash = b.getAttribute('data-nav-to'); });
+  });
+  $all('[data-go]', thread).forEach(function (b) {
+    b.addEventListener('click', function () { if (lastRoute) goAfterRoute(lastRoute); });
+  });
+  bindReroute(thread);
+}
+function bindHome(root) {
+  function setBusy(on) {
+    homeBusy = on;
+    var inp = $('#home-input', root);
+    var btn = $('#home-send', root);
+    if (inp) inp.disabled = on;
+    if (btn) btn.disabled = on;
+  }
+  function go(q) {
+    if (homeBusy || !q) return;
+    var prev = lastRoute;
+    var history = homeChat.filter(function (m) { return m && !m.thinking && m.text; }).map(function (m) {
+      return { role: m.role === 'me' ? 'user' : 'assistant', content: m.text };
+    });
+    lastQuery = q;
+    homeChat.push({ role: 'me', text: q });
+    homeChat.push({ role: 'bot', thinking: true });
+    setBusy(true);
+    paintHomeThread(root);
+    $('#home-input', root).value = '';
+
+    function finish(res) {
+      lastRoute = res;
+      homeChat.pop();
+      homeChat.push({ role: 'bot', text: res.reply, route: res });
+      setBusy(false);
+      paintHomeThread(root);
+      if (res.next === 'match' && res.type !== 'emotion') {
+        setTimeout(function () { location.hash = '#/match'; }, 350);
+        return;
+      }
+      $('#home-input', root).focus();
+    }
+    function fail(err) {
+      homeChat.pop();
+      if (err && err.needLogin) {
+        homeChat.push({
+          role: 'bot',
+          text: '这句话会进真实对话，先登录一下。',
+          route: { needLogin: true, type: '' }
+        });
+      } else {
+        homeChat.push({ role: 'bot', text: '暂时走不通：' + (err.message || err) });
+      }
+      setBusy(false);
+      paintHomeThread(root);
+      $('#home-input', root).focus();
+    }
+
+    var seed = Object.assign({}, prev || {}, { heard: q });
+    if (!seed.type) seed.type = 'explore';
+    WowAPI.discuss(q, seed, history, null, wowSessionId).then(function (d) {
+      var res = applyDiscuss(seed, d);
+      if (res.type === 'emotion') res.next = 'stop';
+      return res;
+    }).then(finish).catch(fail);
+  }
+  paintHomeThread(root);
   $('#home-send', root).addEventListener('click', function () {
-    var v = $('#home-input', root).value.trim(); if (v) go(v);
+    go($('#home-input', root).value.trim());
   });
   $('#home-input', root).addEventListener('keydown', function (e) {
-    if (e.key === 'Enter') { var v = this.value.trim(); if (v) go(v); }
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      go(this.value.trim());
+    }
   });
-  $all('.hero-chips .chip-btn', root).forEach(function (b) {
+  $all('#home-chips .chip-btn', root).forEach(function (b) {
     b.addEventListener('click', function () {
-      $('#home-input', root).value = b.getAttribute('data-q');
-      go(b.getAttribute('data-q'));
+      var q = b.getAttribute('data-q');
+      $('#home-input', root).value = q;
+      go(q);
     });
   });
+  setTimeout(function () { var i = $('#home-input', root); if (i) i.focus(); }, 0);
 }
 
 /* ============================================================
@@ -425,6 +595,72 @@ function bindExplore(root) {
       render();
     });
   });
+}
+
+/* ============================================================
+ * 视图：按原话找 Skill（抉择/探索的下一步）
+ * ============================================================ */
+function viewMatch() {
+  var q = matchTaskLabel();
+  return '<div class="view">' +
+    '<div class="crumb"><a href="#/home">首页</a> / 匹配 Skill</div>' +
+    '<div class="page-head"><h1>匹配能帮你做完这件事的 Skill</h1>' +
+    '<p>你要做的是「' + esc(q || '（从对话进来）') + '」。对得上就装载去做，对不上就去许愿池——不编一张假卡。</p></div>' +
+    '<div id="match-grid"><div class="n-note">正在按你要做的事找卡…</div></div></div>';
+}
+function bindMatch(root) {
+  var q = matchTaskLabel();
+  var local = matchSkills(q);
+  ((lastRoute && lastRoute.context && lastRoute.context.skills) || []).forEach(function (ref) {
+    var s = ref && DB.skills[ref.id];
+    if (s && local.indexOf(s) < 0) local.unshift(s);
+  });
+  function paint(list) {
+    var grid = (root && document.body.contains(root) && $('#match-grid', root)) || document.querySelector('#match-grid');
+    if (!grid) return;
+    var seen = {};
+    var merged = [];
+    local.concat(list || []).forEach(function (s) {
+      if (!s || !s.id || seen[s.id]) return;
+      seen[s.id] = true;
+      merged.push(s);
+    });
+    var html;
+    try {
+      html = merged.length
+        ? '<div class="grid-3">' + merged.slice(0, 6).map(function (s) {
+            return '<div class="match-wrap">' + skillCardHtml(s) +
+              '<div class="match-why">这张卡是别人把这件事做完的方法。装载后按剧本走，不承诺结果。</div></div>';
+          }).join('') + '</div>'
+        : '<div class="empty-box">还没有能帮你做完这件事的卡。<br>我们不编一张假的。<br><br>' +
+          '<button class="btn-main" data-nav-to="#/wishes">去许愿池挂这个任务 →</button></div>';
+    } catch (err) {
+      html = '<div class="empty-box">还没有能帮你做完这件事的卡。<br>我们不编一张假的。<br><br>' +
+        '<button class="btn-main" data-nav-to="#/wishes">去许愿池挂这个任务 →</button></div>';
+    }
+    var extra = '<div class="actions" style="margin-top:16px">' +
+      (lastRoute && lastRoute.junctionId ? '<a class="btn-ghost" href="#/junction/' + lastRoute.junctionId + '">回看真实分叉</a>' : '') +
+      '<a class="btn-ghost" href="#/market">去市场自己搜</a>' +
+      '<a class="btn-ghost" href="#/wishes">没有就挂许愿池</a></div>' +
+      '<div class="n-note">匹配不是给建议。能装载的是别人做过这件事的方法；对不上就说还没有，去许愿池。</div>';
+    grid.innerHTML = html + extra;
+    bindSkillLinks(grid);
+    $all('[data-nav-to]', grid).forEach(function (b) {
+      b.addEventListener('click', function () { location.hash = b.getAttribute('data-nav-to'); });
+    });
+  }
+  paint([]);
+  var tokens = queryTokens(matchSearchBlob() || q).filter(function (t) {
+    return t && t.length >= 2 && t.length <= 6;
+  });
+  var prefer = tokens.filter(function (t) {
+    return /朋友|社交|搭子|破冰|恋爱|保研|转专业|实习|考研|就业|论文/.test(t);
+  });
+  var kw = prefer[0] || tokens[0] || '';
+  if (!kw) return;
+  WowAPI.listSkills({ q: kw }).then(function (list) {
+    paint((list || []).filter(function (s) { return s.fromBackend; }));
+  }).catch(function () { paint([]); });
 }
 
 /* ============================================================
@@ -579,6 +815,10 @@ function viewWishes() {
     '<div id="wish-list"><div class="n-note">加载中…</div></div></div>';
 }
 function bindWishes(root) {
+  var titleEl = $('#wish-title', root);
+  if (titleEl && lastQuery && !titleEl.value) {
+    titleEl.value = lastQuery.replace(/\s+/g, ' ').slice(0, 40);
+  }
   function needLogin(err) {
     if (err && err.needLogin) {
       toast('登录后才能挂愿望');
@@ -681,7 +921,7 @@ function viewSkill(id) {
   if (!s) return '<div class="empty-box">Skill 不存在</div>';
   var st = stageOf(s.stageId);
 
-  var scriptHtml = s.script.map(function (row) {
+  var scriptHtml = (Array.isArray(s.script) ? s.script : []).map(function (row) {
     return '<div class="script-item"><span class="day">' + esc(row[0]) + '</span><span>' + esc(row[1]) + '</span></div>';
   }).join('');
 
@@ -1065,6 +1305,13 @@ function viewJunction(id) {
       '<div class="bbar" style="width:' + (b.count / max * 100) + '%;background:' + b.color + '"></div>' + quotes + '</div>';
   }).join('');
   var relHtml = (j.relatedSkills || []).map(skillChipHtml).join('');
+  var canOrch = /保研|考研|就业|毕业|志愿|高考|出国/.test(j.title);
+  var skillSection = '<div class="section-title">决定之前，可以先看清处境</div>' +
+    '<p class="n-note" style="margin-top:0">不是建议你选哪边。这些卡是别人用来看清自己的方法；没有卡就去许愿池。</p>' +
+    (relHtml ? '<div class="card flat"><div class="t-skills">' + relHtml + '</div></div>' : '') +
+    '<div class="actions">' +
+    '<a class="btn-main" href="#/match">按刚才那句话找 Skill →</a>' +
+    '<a class="btn-ghost" href="#/wishes">没有卡，挂许愿池</a></div>';
   return '<div class="view">' +
     '<div class="crumb"><a href="#/home">首页</a> / 路口</div>' +
     '<div class="junction-head">' +
@@ -1073,8 +1320,9 @@ function viewJunction(id) {
     '<div class="src">' + esc(j.source) + '</div></div>' +
     '<div class="branches">' + branchesHtml + '</div>' +
     '<div class="switch-note">⚠️ <b>' + esc(j.switchNote) + '</b> 我们把它标出来，不是劝你等，是让你知道大家在哪里重新做了决定。</div>' +
-    (relHtml ? '<div class="section-title">决定之后可以装载</div><div class="card flat"><div class="t-skills">' + relHtml + '</div></div>' : '') +
-    '<div class="actions"><a class="btn-main" href="#/orch/' + guessOrch(j.title) + '">我已经决定了，帮我排 →</a>' +
+    skillSection +
+    '<div class="actions">' +
+    (canOrch ? '<a class="btn-ghost" href="#/orch/' + guessOrch(j.title) + '">我已经决定了，帮我排 →</a>' : '') +
     '<a class="btn-ghost" href="#/paths">全部路口</a></div>' +
     rerouteHtml() +
     '<div class="n-note">本页无任何成功率。名额与结果由分配规则决定，给数字就是骗人。</div>' +
@@ -1337,7 +1585,7 @@ function viewMe() {
     '<p style="font-size:12.5px;color:var(--ink-3);font-weight:700">' +
     esc([bu.school, bu.major, bu.grade].filter(Boolean).join(' · ') || u.major) +
     (level ? ' · ' + esc(level) : '') +
-    ' · 当前阶段：' + esc(stageOf(u.stageId).name) + ' · 🪙 ' + State.coins + ' 积分</p>' +
+    ' · 当前阶段：' + esc((stageOf(u.stageId) || {}).name || '') + ' · 🪙 ' + State.coins + ' 积分</p>' +
     '<p><a class="btn-ghost btn-sm" href="#/publish">沉淀经验</a></p></div></div>' +
     '<div class="me-tabs">' + tabsHtml + '</div>' + body + '</div>';
 }
@@ -1364,6 +1612,7 @@ function render() {
   switch (r.page) {
     case 'home': html = viewHome(); bind = bindHome; break;
     case 'explore': html = viewExplore(); bind = bindExplore; navKey = 'home'; break;
+    case 'match': html = viewMatch(); bind = bindMatch; navKey = 'market'; break;
     case 'paths': html = viewPaths(); bind = bindPaths; navKey = 'paths'; break;
     case 'orch': html = viewOrch(r.param); bind = function (root) { bindOrch(root, r.param); }; navKey = 'paths'; break;
     case 'stage': html = viewStage(r.param); bind = bindStage; break;

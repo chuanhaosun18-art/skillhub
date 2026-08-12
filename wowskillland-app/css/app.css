@@ -104,6 +104,50 @@ a{color:inherit;text-decoration:none}
 .n-note{font-size:11.5px;color:var(--ink-3);font-weight:600;margin-top:12px}
 
 /* ================= home ================= */
+.home-wrap{max-width:680px;margin:0 auto}
+.home-chat{
+  background:var(--paper);border:2.5px solid var(--ink);border-radius:22px;
+  box-shadow:6px 6px 0 rgba(34,32,28,.9);
+  display:flex;flex-direction:column;min-height:min(72vh,640px);
+}
+.home-intro{padding:28px 28px 10px}
+.home-intro h1{font-size:26px;font-weight:900;line-height:1.35}
+.home-intro h1 .hl{color:var(--violet);text-shadow:2px 2px 0 var(--amber)}
+.home-intro p{font-size:14px;color:var(--ink-2);font-weight:600;margin-top:6px}
+.home-chips{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
+.home-thread{
+  flex:1;overflow-y:auto;padding:8px 22px 12px;
+  display:flex;flex-direction:column;gap:12px;min-height:180px;
+}
+.msg{display:flex;flex-direction:column;max-width:92%;gap:6px}
+.msg.me{align-self:flex-end;align-items:flex-end}
+.msg.bot{align-self:flex-start}
+.msg .bubble{
+  border:2px solid var(--ink);border-radius:16px;padding:10px 14px;
+  font-size:14.5px;font-weight:600;line-height:1.55;white-space:pre-line;
+}
+.msg.me .bubble{background:var(--violet);color:#fff;border-top-right-radius:4px}
+.msg.bot .bubble{background:var(--cream);border-top-left-radius:4px}
+.msg .bubble.thinking{color:var(--ink-3);font-style:italic;font-weight:700}
+.msg .heard{font-size:11.5px;font-weight:800;color:var(--violet)}
+.ctx-refs{display:flex;flex-wrap:wrap;gap:6px;margin-top:2px}
+.ctx-chip{
+  display:inline-flex;align-items:center;gap:6px;max-width:100%;
+  font-size:11.5px;font-weight:700;line-height:1.3;color:var(--ink-2);
+  border:1.5px solid var(--ink);border-radius:99px;padding:4px 10px;background:var(--paper);
+  text-decoration:none;
+}
+.ctx-chip i{font-style:normal;font-size:10px;font-weight:900;color:var(--violet)}
+.ctx-chip:hover{background:var(--amber-soft);color:var(--ink)}
+.home-composer{
+  display:flex;gap:8px;padding:14px 16px 16px;border-top:2px solid var(--ink);align-items:stretch;
+}
+.home-composer input{
+  flex:1;border:2px solid var(--ink);border-radius:14px;padding:12px 16px;
+  font-size:15px;font-family:inherit;background:var(--cream);outline:none;min-width:0;
+}
+.home-composer input:focus{background:#fff;border-color:var(--violet)}
+.home-composer input:disabled,.home-composer .btn-main:disabled{opacity:.5}
 .hero{
   background:var(--paper);border:2.5px solid var(--ink);border-radius:22px;
   box-shadow:6px 6px 0 rgba(34,32,28,.9);padding:30px 32px;margin-bottom:24px;
@@ -552,8 +596,13 @@ a{color:inherit;text-decoration:none}
   .stage{padding:16px 14px 96px;min-height:auto}
   .hero{padding:18px 16px;border-radius:16px;box-shadow:3px 3px 0 rgba(34,32,28,.9)}
   .hero h1{font-size:22px}
+  .home-chat{min-height:calc(100vh - 160px);border-radius:16px;box-shadow:3px 3px 0 rgba(34,32,28,.9)}
+  .home-intro{padding:18px 16px 6px}
+  .home-intro h1{font-size:22px}
+  .home-thread{padding:8px 14px 10px}
+  .home-composer{padding:10px 12px max(12px,env(safe-area-inset-bottom))}
   .hero-input{flex-direction:column}
-  .hero-input input,.chat-row input,.auth-form input,.auth-form select,.filterbar input[type=text],.filterbar select,.wish-form input,.wish-form textarea{
+  .hero-input input,.home-composer input,.chat-row input,.auth-form input,.auth-form select,.filterbar input[type=text],.filterbar select,.wish-form input,.wish-form textarea{
     font-size:16px; /* 避免 iOS 聚焦缩放 */
   }
   .hero-input .btn-main{width:100%}

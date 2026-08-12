@@ -19,6 +19,8 @@ backend/*.log
 # 环境与编辑器
 *.local
 .env
+local.env
+../local.env
 .DS_Store
 .vscode/*
 !.vscode/extensions.json
