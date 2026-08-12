@@ -38,6 +38,43 @@ const routes = [
     component: () => import('../views/Profile.vue'),
     meta: { title: '个人中心', requiresAuth: true },
   },
+  // ---------- 成长闭环（PRD P0）----------
+  {
+    path: '/grow',
+    name: 'grow',
+    component: () => import('../views/Grow.vue'),
+    meta: { title: '我要成长', requiresAuth: true },
+  },
+  {
+    path: '/workbench',
+    name: 'workbench',
+    component: () => import('../views/Workbench.vue'),
+    meta: { title: '任务工作台', requiresAuth: true },
+  },
+  {
+    path: '/creator',
+    name: 'creator',
+    component: () => import('../views/Creator.vue'),
+    meta: { title: '固化为 Skill', requiresAuth: true },
+  },
+  {
+    path: '/gate',
+    name: 'gate',
+    component: () => import('../views/Gate.vue'),
+    meta: { title: '发布前四问', requiresAuth: true },
+  },
+  {
+    path: '/trust/:id',
+    name: 'trust-card',
+    component: () => import('../views/TrustCard.vue'),
+    meta: { title: 'Trust Card' },
+  },
+  {
+    path: '/growth/:id',
+    name: 'growth-profile',
+    component: () => import('../views/GrowthProfile.vue'),
+    meta: { title: '成长身份' },
+  },
   {
     path: '/:pathMatch(.*)*',
     redirect: '/',

@@ -5,6 +5,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { authState, fetchMe, updateProfile, fetchMySkills } from '../api/auth'
 import { deleteSkill } from '../api/skills'
 import AppNavbar from '../components/AppNavbar.vue'
+import GrowthPath from '../components/GrowthPath.vue'
 
 const router = useRouter()
 const loading = ref(false)
@@ -108,6 +109,15 @@ function aiLevelLabel(level) {
       <el-skeleton :rows="6" animated v-if="loading" class="skeleton" />
 
       <template v-else-if="authState.user">
+        <!-- 成长路径：个人中心的主体。人是主体，路径是骨架 -->
+        <section class="card growth-card">
+          <div class="growth-head">
+            <h2 class="growth-title">我的成长路径</h2>
+            <el-button link type="primary" @click="router.push('/grow')">继续往下走</el-button>
+          </div>
+          <GrowthPath />
+        </section>
+
         <!-- 用户信息卡片 -->
         <section class="card user-card">
           <div class="user-head">
@@ -243,6 +253,23 @@ function aiLevelLabel(level) {
   padding: 24px;
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.04);
   margin-bottom: 16px;
+}
+
+/* 成长路径卡放在最上面：个人中心的主体不是资料表单，是走过的路 */
+.growth-card {
+  border-top: 3px solid #409eff;
+}
+
+.growth-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.growth-title {
+  margin: 0;
+  font-size: 20px;
 }
 
 .user-card {

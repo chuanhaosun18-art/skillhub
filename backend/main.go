@@ -53,6 +53,57 @@ func main() {
 	api.PATCH("/issues/:id", authMiddleware(), closeIssue)
 	}
 
+	// ---------- 成长闭环（PRD P0）----------
+	// 主张：做事发生在平台内 → 供给是执行的副产品 → 信任来自证据而非评分
+	growth := r.Group("/api/growth")
+	{
+		// F1 目标识别与四筛判定（伪需求在这里被拦住，不进任务流）
+		growth.POST("/goals/interpret", authMiddleware(), interpretGoal)
+
+		// F4 任务工作台：所有执行必须落 execution_steps
+		growth.POST("/executions", authMiddleware(), createExecution)
+		growth.GET("/executions", authMiddleware(), listMyExecutions)
+		growth.GET("/executions/:id", authMiddleware(), getExecution)
+		growth.POST("/executions/:id/advance", authMiddleware(), advanceExecution)
+		growth.POST("/executions/:id/decide", authMiddleware(), recordDecision)
+		growth.POST("/executions/:id/edit", authMiddleware(), recordEdit)
+		growth.POST("/executions/:id/complete", authMiddleware(), completeExecution)
+		growth.POST("/executions/:id/abandon", authMiddleware(), abandonExecution)
+
+		// F5 Skill Creator：轨迹 → 四槽 → 蒸馏度 → 六 slot 文件夹
+		growth.POST("/executions/:id/distill", authMiddleware(), distillExecution)
+		growth.GET("/drafts/:versionID", authMiddleware(), getDraft)
+		growth.PATCH("/drafts/:versionID", authMiddleware(), updateDraft)
+		growth.POST("/drafts/:versionID/decisions", authMiddleware(), upsertDecision)
+		growth.DELETE("/decisions/:id", authMiddleware(), deleteDecision)
+		growth.POST("/drafts/:versionID/downgrade", authMiddleware(), downgradeToInsight)
+		growth.POST("/drafts/:versionID/generate-folder", authMiddleware(), generateFolder)
+
+		// F6 发布前四问与门禁
+		growth.POST("/skills/:id/evals/run", authMiddleware(), runEvals)
+		growth.GET("/skills/:id/gate", getGateStatus)
+		growth.POST("/skills/:id/publish", authMiddleware(), publishSkill)
+
+		// F7/F8 准入四层与两段式路由
+		growth.POST("/route", authMiddleware(), routeSkills)
+		growth.POST("/admin/recompute-scores", authMiddleware(), recomputeAllScores)
+
+		// F10 Trust Card 与判断级溯源
+		growth.GET("/skills/:id/trust-card", getTrustCard)
+		growth.GET("/decisions/:id/trace", getDecisionTrace)
+
+		// F13 个人成长主页与成长身份（成长路径从真实执行派生）
+		// 注意：my-profile 与 profile/:id 分开命名，避免静态段与参数段在同级冲突
+		growth.GET("/my-profile", authMiddleware(), getMyGrowthProfile)
+		growth.PATCH("/my-profile/visibility", authMiddleware(), updateVisibility)
+		growth.GET("/profile/:id", optionalAuth(), getUserGrowthProfile)
+
+		// F12 反馈闭环与版本升级
+		growth.POST("/executions/:id/feedback", authMiddleware(), submitExecFeedback)
+		growth.GET("/skills/:id/version-candidates", listVersionCandidates)
+		growth.POST("/version-candidates/:id/accept", authMiddleware(), acceptVersionCandidate)
+	}
+
 	port := os.Getenv("SKILLHUB_PORT")
 	if port == "" {
 		port = "8080"

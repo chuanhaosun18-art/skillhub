@@ -23,10 +23,10 @@ const filteredResults = computed(() => {
   if (activeCategory.value !== '全部') {
     list = list.filter((s) => s.category === activeCategory.value)
   }
-  if (sortOrder.value === 'rating') {
-    list.sort((a, b) => b.rating - a.rating)
-  } else if (sortOrder.value === 'likes') {
-    list.sort((a, b) => b.likes - a.likes)
+  // 按 PRD 改造：不再提供按评分/热度排序。
+  // 热度可以反映注意力，任务证据才能说明能力——所以只按证据（质量分）排。
+  if (sortOrder.value === 'evidence') {
+    list.sort((a, b) => (b.quality_score || 0) - (a.quality_score || 0))
   }
   return list
 })
@@ -111,9 +111,8 @@ function goDetail(id) {
       <!-- 筛选栏 -->
       <div class="filter-bar" v-if="searched && results.length">
         <el-radio-group v-model="sortOrder" size="small">
-          <el-radio-button value="default">默认</el-radio-button>
-          <el-radio-button value="rating">评分最高</el-radio-button>
-          <el-radio-button value="likes">最受欢迎</el-radio-button>
+          <el-radio-button value="default">最新</el-radio-button>
+          <el-radio-button value="evidence">证据最充分</el-radio-button>
         </el-radio-group>
         <div class="categories">
           <span
@@ -140,7 +139,7 @@ function goDetail(id) {
                 {{ skill.name }}
                 <el-tag v-if="skill.version" size="small" effect="plain">v{{ skill.version }}</el-tag>
               </div>
-              <el-rate :model-value="skill.rating" disabled :show-score="false" text-color="#ff9900" />
+              <!-- 不显示星级：信任面一律不出现综合评分 -->
             </div>
             <div class="skill-desc">{{ skill.description }}</div>
             <div class="skill-tags">
@@ -155,8 +154,8 @@ function goDetail(id) {
                 <el-tag size="small" type="success" effect="plain">{{ skill.category }}</el-tag>
               </div>
               <div class="stats">
-                <span class="stat"><el-icon><StarFilled /></el-icon> {{ skill.rating }}</span>
-                <span class="stat"><el-icon><ThumbsUp /></el-icon> {{ skill.likes }}</span>
+                <!-- 热度降级为「注意力参考」，不参与排序也不作为信任依据 -->
+                <span class="stat attention">注意力 {{ skill.likes }}</span>
               </div>
             </div>
           </div>
@@ -349,6 +348,11 @@ function goDetail(id) {
   gap: 4px;
   font-size: 13px;
   color: #909399;
+}
+/* 注意力指标弱化显示 */
+.stat.attention {
+  font-size: 12px;
+  color: #c0c4cc;
 }
 
 .footer {
