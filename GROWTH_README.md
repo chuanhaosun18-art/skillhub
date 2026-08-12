@@ -134,6 +134,42 @@ irm http://localhost:8080/api/growth/skills/1/trust-card
 
 注意两处近似：`successors`（后继者）目前用「用过我的方法且自己也做成过的人」近似，等 Growth Graph 的 `path_follows` 上线后改用真实跟走关系；`taught` 要求对方执行状态为 completed，所以新库里一开始都是空的。
 
+## F17 编排态（PRD v1.1/v1.2 新增）
+
+长周期方向性需求（保研、考研、出国、求职季）的第三个出口。交付的不是产物，是一份带时间的编排。
+
+**三态路由现在是这样：**
+
+| 输入 | 出口 | 交付物 |
+|---|---|---|
+| 我的选题被导师退了两次 | 任务态 | 一份改好的选题 |
+| 我决定保研了，接下来怎么准备 | **编排态** | 一份 8 周的编排 |
+| 我到底该不该保研 | 拒绝态 | 别人走过的分支与人数，不给建议 |
+| 我最近很崩溃 | 拒绝态（全拦） | 一段回应 + 心理支持入口，不落任何记录 |
+
+**硬约束在代码里的落点：**
+
+| 约束 | 实现位置 |
+|---|---|
+| 无来源 Path 不生成编排 | `orchestration_items.source_path_id` 建表时 NOT NULL；`probeOrchestration` 先拦一道；`createOrchestration` 里无来源节点的项直接丢弃 |
+| 不出现任何成功率 | `branchSummaryText` 只输出绝对人数；Prompt 里明令禁止百分比；响应带 `no_outcome_promise: true` |
+| 不可控项独立分组 | `respondOrchestration` 按 `controllable` 分流，前端 `uncontrollable` 区无勾选框 |
+| retrospective 不给耗时与卡点 | `loadPathNodes` 不返回 `typical_duration_days` / `common_blocker`；界面显示来源提示 |
+
+**新增接口：**`POST /orch-probe`、`POST /orch-interview`、`POST/GET /orchestrations`、`GET /orchestrations/:id`、`POST /orchestrations/:id/adopt`、`PATCH /orchestrations/:id/items/:itemId`、`POST /orchestrations/:id/reviews`。
+页面：`/orchestration`（访谈 → 编排 → 采纳 → 周复核）。
+
+**预置数据：**`seedPaths()` 建了一条保研 Path，10 个节点，`provenance=retrospective`（诚实标注是回忆整理，不是平台内观测）。Demo 时选「考研准备」会触发"没人走过、拒绝生成"那一幕——**这一幕比生成成功更能说明平台的判断力，建议放进路演**。
+
+## v1.2 的四条规则级改动
+
+| 改动 | 实现 |
+|---|---|
+| intent 分层 | `ProductiveIntents` 白名单。模拟面试、面试复盘、内容脚本属于只消费类，不要求关键判断、不提示固化 |
+| 轨迹补录 | `POST /growth/backfill`。承认用户在平台外做事，但 `proof_type=artifact_upload` 时蒸馏度**封顶 0.85**（`distillDetail.total()` 里实现），Trust Card 标注"来源为补录，无执行轨迹" |
+| 冷启动反馈门槛 | `checkVersionTriggers` 里按调用量切换：≥20 次用 3 次/3 人，<20 次用 2 次/2 人 |
+| choose_if | 路由每个结果附一句"选它取决于什么"，依据该 Skill 流程第一步是否为盘点类判断。**不引入任何分数** |
+
 ## 已知未完成
 
 - F2 Growth Graph / F3 同行组：后端未实现，前端未接（PRD 里是 P1）

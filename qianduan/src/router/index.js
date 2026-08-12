@@ -76,6 +76,12 @@ const routes = [
     meta: { title: '成长身份' },
   },
   {
+    path: '/orchestration',
+    name: 'orchestration',
+    component: () => import('../views/Orchestration.vue'),
+    meta: { title: '接下来几周该做什么', requiresAuth: true },
+  },
+  {
     path: '/:pathMatch(.*)*',
     redirect: '/',
   },

@@ -117,7 +117,52 @@ func interpretGoal(c *gin.Context) {
 		return
 	}
 
-	// 命中五类伪需求 → 拒绝策略，不创建任务、不落 Experience
+	// ---------- 三态路由（PRD v1.1 §1.5，判定必须按此顺序）----------
+
+	// 第一顺位：情绪类立即返回，不再做任何后续判断
+	if res.TaskIntent == IntentEmotionalSupport {
+		c.JSON(http.StatusOK, gin.H{
+			"mode":        "rejected",
+			"task_intent": res.TaskIntent,
+			"reason":      RejectedIntents[IntentEmotionalSupport],
+			"response":    rejectionResponse(IntentEmotionalSupport),
+			"resources":   rejectionResources(IntentEmotionalSupport),
+		})
+		return
+	}
+
+	// 第二顺位：「该不该」型抉择——不给建议，只展示别人的分支与代价
+	if res.TaskIntent == IntentLifeDecision && looksUndecided(utterance) {
+		c.JSON(http.StatusOK, gin.H{
+			"mode":        "rejected",
+			"task_intent": res.TaskIntent,
+			"reason":      RejectedIntents[IntentLifeDecision],
+			"response":    rejectionResponse(IntentLifeDecision),
+			"resources":   rejectionResources(IntentLifeDecision),
+			"branches":    lifeDecisionBranches(),
+		})
+		return
+	}
+
+	// 第三顺位：编排态。已经决定了方向、或名额竞争、或资源依赖 → 给编排不给承诺。
+	// 注意 life_decision 但不含「该不该」措辞的（例如「我决定考研了，接下来怎么排」）也走这里。
+	if orchIntent, ok := OrchestrationRouteIntents[res.TaskIntent]; ok ||
+		res.TaskIntent == IntentLifeDecision {
+		if orchIntent == "" {
+			orchIntent = guessOrchestrationIntent(utterance)
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"mode":                 "orchestration",
+			"task_intent":          res.TaskIntent,
+			"orchestration_intent": orchIntent,
+			"label":                OrchestrationIntents[orchIntent],
+			"message":              "这件事的结果我不敢承诺，但接下来几周该做什么可以排清楚——用别人真走过的路来排。",
+			"next":                 "probe",
+		})
+		return
+	}
+
+	// 其余仍在拒绝集合里的（如 realtime_fact）
 	if reason, rejected := RejectedIntents[res.TaskIntent]; rejected {
 		c.JSON(http.StatusOK, gin.H{
 			"mode":        "rejected",
@@ -227,6 +272,66 @@ func rejectionResponse(intent string) string {
 		return "这件事的关键变量不在方法上，而在你拿不到的资源上。我可以帮你做其中能转移的那部分，比如怎么写第一封联系邮件；剩下的部分我不会假装能解决。"
 	}
 	return ""
+}
+
+// looksUndecided 判断是不是「该不该」型措辞。
+// 这是三态里最细的一条线：还在犹豫 → 不给建议；已经决定 → 给编排。
+func looksUndecided(s string) bool {
+	markers := []string{"该不该", "要不要", "值不值", "值得吗", "好还是", "还是考", "选哪个", "怎么选", "纠结"}
+	for _, m := range markers {
+		if strings.Contains(s, m) {
+			return true
+		}
+	}
+	// 「是否」单独出现也算，但「是否已经」这类陈述不算
+	if strings.Contains(s, "是否") && !strings.Contains(s, "是否已") {
+		return true
+	}
+	return false
+}
+
+// guessOrchestrationIntent 从原话粗判编排方向。判不出来时给保研（当前唯一有 Path 的方向）。
+func guessOrchestrationIntent(s string) string {
+	switch {
+	case strings.Contains(s, "保研") || strings.Contains(s, "推免") || strings.Contains(s, "夏令营"):
+		return "postgrad_recommend"
+	case strings.Contains(s, "考研"):
+		return "postgrad_exam"
+	case strings.Contains(s, "出国") || strings.Contains(s, "留学") || strings.Contains(s, "申请"):
+		return "study_abroad"
+	case strings.Contains(s, "秋招") || strings.Contains(s, "春招") || strings.Contains(s, "找工作") || strings.Contains(s, "求职"):
+		return "job_season"
+	case strings.Contains(s, "进组") || strings.Contains(s, "科研") || strings.Contains(s, "导师"):
+		return "research_entry"
+	case strings.Contains(s, "竞赛") || strings.Contains(s, "比赛"):
+		return "competition_season"
+	}
+	return "postgrad_recommend"
+}
+
+// lifeDecisionBranches 「该不该」型问题的回应：只给别人走过的分支与代价，不给建议。
+func lifeDecisionBranches() []gin.H {
+	rows, err := db.Query(`SELECT goal_label, walked_count, COALESCE(branch_summary,'{}'), provenance
+		FROM paths ORDER BY walked_count DESC LIMIT 5`)
+	if err != nil {
+		return []gin.H{}
+	}
+	defer rows.Close()
+	out := []gin.H{}
+	for rows.Next() {
+		var goal, branch, prov string
+		var walked int
+		if rows.Scan(&goal, &walked, &branch, &prov) == nil {
+			out = append(out, gin.H{
+				"goal_label":      goal,
+				"walked_count":    walked,
+				"branch_summary":  rawOrDefault(branch, "{}"),
+				"provenance":      prov,
+				"provenance_note": provenanceNote(prov),
+			})
+		}
+	}
+	return out
 }
 
 // rejectionResources 拒绝时给出的替代动作

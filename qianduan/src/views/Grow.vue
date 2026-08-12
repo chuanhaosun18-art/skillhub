@@ -33,8 +33,18 @@
       </div>
     </section>
 
-    <!-- 拒绝：五类伪需求。不创建任务、不落 Experience -->
-    <section v-if="res && res.mode === 'rejected'" class="card reject">
+    <!-- 编排态：长周期方向性需求的出口。不承诺结果，但给编排 -->
+    <section v-if="res && res.mode === 'orchestration'" class="card orch">
+      <h3>这件事我不做成一次任务，我给你排接下来几周</h3>
+      <p class="orch-body">{{ res.message }}</p>
+      <p class="orch-label">方向：{{ res.label }}</p>
+      <el-button type="primary" @click="goOrchestration(res.orchestration_intent)">
+        看看有没有人走过这条路
+      </el-button>
+    </section>
+
+    <!-- 拒绝：情绪类与「该不该」。不创建任务、不落 Experience -->
+    <section v-else-if="res && res.mode === 'rejected'" class="card reject">
       <h3>这件事我不做成 Skill</h3>
       <p class="reject-body">{{ res.response }}</p>
       <p class="reject-why">{{ res.reason }}</p>
@@ -45,6 +55,21 @@
           size="small"
           @click="handleResource(r)"
         >{{ r.label }}</el-button>
+      </div>
+
+      <!-- 「该不该」型问题：不给建议，只给别人走过的分支与人数 -->
+      <div v-if="(res.branches || []).length" class="branches">
+        <div class="branches-title">别人走过的路，以及各自的去向</div>
+        <div v-for="(b, i) in res.branches" :key="i" class="branch-item">
+          <div class="branch-goal">{{ b.goal_label }}（{{ b.walked_count }} 人走过）</div>
+          <div v-if="b.branch_summary && b.branch_summary.branches" class="branch-list">
+            <span v-for="(x, j) in b.branch_summary.branches" :key="j" class="branch-chip">
+              {{ x.count }} 人{{ x.label }}
+            </span>
+          </div>
+          <div v-if="b.provenance_note" class="branch-prov">{{ b.provenance_note }}</div>
+        </div>
+        <div class="branches-note">这是别人的路，不是建议。选择是你的事。</div>
       </div>
     </section>
 
@@ -122,6 +147,8 @@
             <el-tag size="small" type="info">v{{ r.version }}</el-tag>
           </div>
           <div class="rec-why">{{ r.why_this }}</div>
+          <!-- choose_if：不给分数，但给一个你自己能判断的条件 -->
+          <div v-if="r.choose_if" class="rec-choose">{{ r.choose_if }}</div>
           <div v-if="r.why_not_alternative" class="rec-why-not">
             {{ r.why_not_alternative }}
           </div>
@@ -195,7 +222,11 @@ function startTask(intent) {
 
 function handleResource(r) {
   if (r.action === 'goto_home') router.push('/')
-  else if (r.action === 'goto_graph') ElMessage.info('成长地图在下一版开放')
+  else if (r.action === 'goto_graph') router.push('/orchestration')
+}
+
+function goOrchestration(intent) {
+  router.push({ path: '/orchestration', query: { intent, goal: utterance.value } })
 }
 </script>
 
@@ -255,6 +286,69 @@ function handleResource(r) {
   font-size: 12px;
   color: #909399;
   margin: 0 0 12px;
+}
+/* 编排态卡：语气要笃定——不承诺结果不等于帮不上 */
+.orch {
+  border-color: #409eff;
+  background: #f7fbff;
+}
+.orch-body {
+  font-size: 15px;
+  line-height: 1.9;
+  color: #303133;
+  margin: 0 0 8px;
+}
+.orch-label {
+  font-size: 12px;
+  color: #909399;
+  margin: 0 0 14px;
+}
+/* 「该不该」型问题的分支展示：只给人数，不给比率，不给建议 */
+.branches {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid #ebeef5;
+}
+.branches-title {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 10px;
+}
+.branch-item {
+  margin-bottom: 12px;
+}
+.branch-goal {
+  font-size: 13px;
+  color: #303133;
+}
+.branch-list {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+.branch-chip {
+  font-size: 12px;
+  background: #f4f4f5;
+  border-radius: 10px;
+  padding: 2px 10px;
+  color: #606266;
+}
+.branch-prov {
+  font-size: 11px;
+  color: #e6a23c;
+  margin-top: 4px;
+}
+.branches-note {
+  font-size: 12px;
+  color: #909399;
+  margin-top: 10px;
+}
+.rec-choose {
+  font-size: 13px;
+  color: #409eff;
+  margin-top: 6px;
+  line-height: 1.7;
 }
 /* 拒绝卡：语气要稳，不用列表，不给方法 */
 .reject {

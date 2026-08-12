@@ -92,6 +92,20 @@ func main() {
 		growth.GET("/skills/:id/trust-card", getTrustCard)
 		growth.GET("/decisions/:id/trace", getDecisionTrace)
 
+		// F5.3b 轨迹补录：承认用户会在平台外做事，但蒸馏度封顶 0.85
+		growth.POST("/backfill", authMiddleware(), backfillExecution)
+
+		// F17 编排态：长周期方向性需求。只承诺编排，不承诺结果。
+		// probe 与 interview 单独命名，避免与 /orchestrations/:id 在同级产生静态段与参数段冲突
+		growth.POST("/orch-probe", authMiddleware(), probeOrchestration)
+		growth.POST("/orch-interview", authMiddleware(), interviewOrchestration)
+		growth.POST("/orchestrations", authMiddleware(), createOrchestration)
+		growth.GET("/orchestrations", authMiddleware(), listMyOrchestrations)
+		growth.GET("/orchestrations/:id", authMiddleware(), getOrchestration)
+		growth.POST("/orchestrations/:id/adopt", authMiddleware(), adoptOrchestration)
+		growth.PATCH("/orchestrations/:id/items/:itemId", authMiddleware(), updateOrchItem)
+		growth.POST("/orchestrations/:id/reviews", authMiddleware(), reviewOrchestration)
+
 		// F13 个人成长主页与成长身份（成长路径从真实执行派生）
 		// 注意：my-profile 与 profile/:id 分开命名，避免静态段与参数段在同级冲突
 		growth.GET("/my-profile", authMiddleware(), getMyGrowthProfile)
