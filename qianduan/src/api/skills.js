@@ -15,9 +15,24 @@ function normalizeSkill(s) {
   } else if (Array.isArray(s.tags)) {
     tags = s.tags
   }
+  // 评估指标证明图片：后端返回相对路径数组，这里补全为可访问 URL
+  let proofImages = []
+  if (typeof s.proof_images === 'string') {
+    try {
+      proofImages = JSON.parse(s.proof_images)
+    } catch (e) {
+      proofImages = []
+    }
+  } else if (Array.isArray(s.proof_images)) {
+    proofImages = s.proof_images
+  }
+  proofImages = proofImages
+    .filter((p) => p && typeof p === 'string')
+    .map((p) => (p.startsWith('http') ? p : `${BASE}${p}`))
   return {
     ...s,
     tags,
+    proofImages,
     // 后端暂无 likes，用下载量作为“最受欢迎”的排序指标
     likes: s.download_count || 0,
     owner: s.owner_name || '匿名',

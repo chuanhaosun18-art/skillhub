@@ -14,6 +14,8 @@ var (
 	ArchiveDir string
 	// FilesDir 解压后的 skill 文件目录
 	FilesDir string
+	// ProofsDir 评估指标证明图片目录（按 skill id 分子目录存放）
+	ProofsDir string
 	// DBPath SQLite 数据库文件路径
 	DBPath string
 )
@@ -27,9 +29,10 @@ func init() {
 	DataDir = base
 	ArchiveDir = filepath.Join(base, "archives")
 	FilesDir = filepath.Join(base, "files")
+	ProofsDir = filepath.Join(base, "proofs")
 	DBPath = filepath.Join(base, "skillhub.db")
 
-	for _, dir := range []string{DataDir, ArchiveDir, FilesDir} {
+	for _, dir := range []string{DataDir, ArchiveDir, FilesDir, ProofsDir} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			log.Fatalf("create data dir %s failed: %v", dir, err)
 		}

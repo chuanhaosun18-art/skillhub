@@ -11,6 +11,45 @@ const router = useRouter()
 // ===== 发布路径选择：upload | guide =====
 const mode = ref('') // 空 = 未选择
 
+function chooseMode(m) {
+  mode.value = m
+  clearProofs()
+}
+
+// ===== 评估指标证明图片（能力证明，多张） =====
+const PROOF_MAX = 6
+const proofList = ref([]) // { raw: File, url: objectURL }
+
+function clearProofs() {
+  proofList.value.forEach((p) => p.url && URL.revokeObjectURL(p.url))
+  proofList.value = []
+}
+
+function addProofFiles(fileList) {
+  for (const f of fileList) {
+    const raw = f.raw || f
+    if (!raw || !raw.type || !raw.type.startsWith('image/')) {
+      ElMessage.warning('评估指标图片仅支持图片格式')
+      continue
+    }
+    if (raw.size > 10 * 1024 * 1024) {
+      ElMessage.warning('单张评估指标图片不能超过 10MB')
+      continue
+    }
+    if (proofList.value.length >= PROOF_MAX) {
+      ElMessage.warning(`最多上传 ${PROOF_MAX} 张评估指标图片`)
+      break
+    }
+    proofList.value.push({ raw, url: URL.createObjectURL(raw) })
+  }
+}
+
+function removeProof(idx) {
+  const item = proofList.value[idx]
+  if (item && item.url) URL.revokeObjectURL(item.url)
+  proofList.value.splice(idx, 1)
+}
+
 // ===== 方式一：直接上传 =====
 const submitting = ref(false)
 const archiveFile = ref(null)
@@ -68,6 +107,7 @@ async function handlePublish() {
   fd.append('tags', JSON.stringify(form.tags))
   fd.append('version', form.version.trim() || '1.0.0')
   if (archiveFile.value) fd.append('archive', archiveFile.value)
+  proofList.value.forEach((p) => fd.append('proof_images', p.raw))
 
   submitting.value = true
   try {
@@ -347,6 +387,7 @@ async function handlePublishGenerated() {
     fd.append('tags', JSON.stringify(publishInfo.tags))
     fd.append('version', publishInfo.version.trim() || '1.0.0')
     fd.append('archive', zipFile)
+    proofList.value.forEach((p) => fd.append('proof_images', p.raw))
 
     const skill = await createSkill(fd)
     ElMessage.success('技能发布成功')
@@ -360,6 +401,7 @@ async function handlePublishGenerated() {
 
 function backToModeSelect() {
   mode.value = ''
+  clearProofs()
   messages.value = []
   genResult.value = null
   progress.value = 0
@@ -377,12 +419,12 @@ function backToModeSelect() {
         <p class="page-sub">选择一种方式，把你的经验、流程或技能包分享给更多人</p>
 
         <div class="mode-grid">
-          <button class="mode-card" @click="mode = 'upload'">
+          <button class="mode-card" @click="chooseMode('upload')">
             <el-icon class="mode-icon"><UploadFilled /></el-icon>
             <div class="mode-title">直接上传 Skill 包</div>
             <div class="mode-desc">我已经有完整的 skill 文件（zip 格式），直接填写信息发布，适合熟悉 AI 工具的同学。</div>
           </button>
-          <button class="mode-card" @click="mode = 'guide'">
+          <button class="mode-card" @click="chooseMode('guide')">
             <el-icon class="mode-icon"><MagicStick /></el-icon>
             <div class="mode-title">AI 引导创建</div>
             <div class="mode-desc">还不清楚怎么构建 skill？和 AI 对话（支持文字、语音、文件、图片），由 AI 帮你把经验整理成完整的 skill 包。</div>
@@ -463,6 +505,27 @@ function backToModeSelect() {
                 <el-button link type="danger" @click="removeFile">移除</el-button>
               </div>
             </div>
+          </el-form-item>
+
+          <el-form-item label="评估指标图片（能力证明，可选，最多 6 张）">
+            <div class="proof-uploader">
+              <el-upload
+                list-type="picture-card"
+                :auto-upload="false"
+                :show-file-list="false"
+                accept="image/*"
+                multiple
+                :disabled="proofList.length >= PROOF_MAX"
+                :on-change="(f) => addProofFiles([f])"
+              >
+                <el-icon><Plus /></el-icon>
+              </el-upload>
+              <div v-for="(p, i) in proofList" :key="i" class="proof-item">
+                <img :src="p.url" class="proof-img" alt="评估指标图片" />
+                <span class="proof-remove" @click="removeProof(i)">×</span>
+              </div>
+            </div>
+            <div class="el-upload__tip">上传完成任务的成果截图、执行记录、结果对比等，用证据证明这个技能真的可用（将展示在搜索结果中）</div>
           </el-form-item>
 
           <el-button
@@ -601,6 +664,26 @@ function backToModeSelect() {
               <el-select v-model="publishInfo.tags" multiple filterable allow-create default-first-option style="width: 100%">
                 <el-option v-for="t in publishInfo.tags" :key="t" :label="t" :value="t" />
               </el-select>
+            </el-form-item>
+            <el-form-item label="评估指标图片（能力证明，可选，最多 6 张）">
+              <div class="proof-uploader">
+                <el-upload
+                  list-type="picture-card"
+                  :auto-upload="false"
+                  :show-file-list="false"
+                  accept="image/*"
+                  multiple
+                  :disabled="proofList.length >= PROOF_MAX"
+                  :on-change="(f) => addProofFiles([f])"
+                >
+                  <el-icon><Plus /></el-icon>
+                </el-upload>
+                <div v-for="(p, i) in proofList" :key="i" class="proof-item">
+                  <img :src="p.url" class="proof-img" alt="评估指标图片" />
+                  <span class="proof-remove" @click="removeProof(i)">×</span>
+                </div>
+              </div>
+              <div class="el-upload__tip">上传完成任务的成果截图、执行记录、结果对比等，用证据证明这个技能真的可用（将展示在搜索结果中）</div>
             </el-form-item>
           </el-form>
 
@@ -742,6 +825,56 @@ function backToModeSelect() {
 .publish-btn {
   width: 100%;
   margin-top: 8px;
+}
+
+/* 评估指标证明图片 */
+.proof-uploader {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  width: 100%;
+}
+
+.proof-uploader :deep(.el-upload--picture-card) {
+  width: 100px;
+  height: 100px;
+}
+
+.proof-item {
+  position: relative;
+  width: 100px;
+  height: 100px;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid #e4e7ed;
+  background: #f5f7fa;
+}
+
+.proof-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.proof-remove {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  font-size: 14px;
+  line-height: 18px;
+  text-align: center;
+  cursor: pointer;
+  user-select: none;
+}
+
+.proof-remove:hover {
+  background: #f56c6c;
 }
 
 /* AI 引导 */

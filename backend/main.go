@@ -15,6 +15,9 @@ func main() {
 	// CORS 中间件（允许前端开发服务器跨域调用）
 	r.Use(corsMiddleware())
 
+	// 静态文件：评估指标证明图片
+	r.Static("/uploads/proofs", ProofsDir)
+
 	// API 路由
 	api := r.Group("/api")
 	{

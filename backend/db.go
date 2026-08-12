@@ -51,6 +51,7 @@ type Skill struct {
 	RatingCount   int          `json:"rating_count"`
 	CreatedAt     time.Time    `json:"created_at"`
 	UpdatedAt     time.Time    `json:"updated_at"`
+	ProofImages   []string     `json:"proof_images,omitempty"` // 评估指标证明图片 URL 列表
 	Files         []SkillFile  `json:"files,omitempty"`
 }
 
@@ -165,9 +166,10 @@ CREATE INDEX IF NOT EXISTS idx_issues_skill ON skill_issues(skill_id);
 		}
 	}
 
-	// 老库迁移：skills 表补充评分人数
+	// 老库迁移：skills 表补充评分人数、评估指标证明图片
 	skillMigrations := []string{
 		"ALTER TABLE skills ADD COLUMN rating_count INTEGER DEFAULT 0",
+		"ALTER TABLE skills ADD COLUMN proof_images TEXT DEFAULT '[]'",
 	}
 	for _, m := range skillMigrations {
 		if _, err := db.Exec(m); err != nil {

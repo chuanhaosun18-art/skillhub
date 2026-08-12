@@ -54,7 +54,8 @@ func listSkills(c *gin.Context) {
 
 	query := `SELECT s.id, s.owner_id, COALESCE(u.username,''), s.name, s.description,
 		s.category, s.tags, s.version, s.icon, s.file_count, s.total_size,
-		s.download_count, s.view_count, s.rating, s.rating_count, s.created_at, s.updated_at
+		s.download_count, s.view_count, s.rating, s.rating_count, s.created_at, s.updated_at,
+		COALESCE(s.proof_images,'[]')
 		FROM skills s LEFT JOIN users u ON s.owner_id = u.id`
 	if len(where) > 0 {
 		query += " WHERE " + strings.Join(where, " AND ")
@@ -71,12 +72,15 @@ func listSkills(c *gin.Context) {
 	skills := []Skill{}
 	for rows.Next() {
 		var s Skill
+		var proofRaw string
 		if err := rows.Scan(&s.ID, &s.OwnerID, &s.OwnerName, &s.Name, &s.Description,
 			&s.Category, &s.Tags, &s.Version, &s.Icon, &s.FileCount, &s.TotalSize,
-			&s.DownloadCount, &s.ViewCount, &s.Rating, &s.RatingCount, &s.CreatedAt, &s.UpdatedAt); err != nil {
+			&s.DownloadCount, &s.ViewCount, &s.Rating, &s.RatingCount, &s.CreatedAt, &s.UpdatedAt,
+			&proofRaw); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
+		s.ProofImages = parseProofImages(proofRaw)
 		skills = append(skills, s)
 	}
 	c.JSON(http.StatusOK, gin.H{"data": skills, "total": len(skills)})
@@ -87,17 +91,21 @@ func getSkill(c *gin.Context) {
 	id := c.Param("id")
 
 	var s Skill
+	var proofRaw string
 	err := db.QueryRow(`SELECT s.id, s.owner_id, COALESCE(u.username,''), s.name, s.description,
 		s.category, s.tags, s.version, s.icon, s.file_count, s.total_size,
-		s.download_count, s.view_count, s.rating, s.rating_count, s.created_at, s.updated_at
+		s.download_count, s.view_count, s.rating, s.rating_count, s.created_at, s.updated_at,
+		COALESCE(s.proof_images,'[]')
 		FROM skills s LEFT JOIN users u ON s.owner_id = u.id WHERE s.id = ?`, id).
 		Scan(&s.ID, &s.OwnerID, &s.OwnerName, &s.Name, &s.Description,
 			&s.Category, &s.Tags, &s.Version, &s.Icon, &s.FileCount, &s.TotalSize,
-			&s.DownloadCount, &s.ViewCount, &s.Rating, &s.RatingCount, &s.CreatedAt, &s.UpdatedAt)
+			&s.DownloadCount, &s.ViewCount, &s.Rating, &s.RatingCount, &s.CreatedAt, &s.UpdatedAt,
+			&proofRaw)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "skill not found"})
 		return
 	}
+	s.ProofImages = parseProofImages(proofRaw)
 
 	// 文件列表
 	rows, err := db.Query(`SELECT id, skill_id, file_path, size, sha256 FROM skill_files WHERE skill_id = ? ORDER BY file_path`, id)
@@ -174,6 +182,24 @@ func createSkill(c *gin.Context) {
 		if err := saveAndExtractArchive(c, skillID, archive); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "save archive failed: " + err.Error()})
 			return
+		}
+	}
+
+	// 处理评估指标证明图片（多张，字段名 proof_images）
+	if form, err := c.MultipartForm(); err == nil {
+		if files, ok := form.File["proof_images"]; ok && len(files) > 0 {
+			urls, perr := saveProofImages(skillID, files)
+			if perr != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "save proof images failed: " + perr.Error()})
+				return
+			}
+			if len(urls) > 0 {
+				proofJSON, _ := json.Marshal(urls)
+				if _, uerr := db.Exec(`UPDATE skills SET proof_images = ? WHERE id = ?`, string(proofJSON), skillID); uerr != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"error": "save proof images failed: " + uerr.Error()})
+					return
+				}
+			}
 		}
 	}
 
@@ -350,6 +376,7 @@ func deleteSkill(c *gin.Context) {
 	// 清理磁盘文件
 	os.RemoveAll(filepath.Join(FilesDir, id))
 	os.Remove(filepath.Join(ArchiveDir, id+".zip"))
+	os.RemoveAll(filepath.Join(ProofsDir, id))
 	c.JSON(http.StatusOK, gin.H{"message": "deleted"})
 }
 
@@ -357,17 +384,80 @@ func deleteSkill(c *gin.Context) {
 
 func getSkillByID(id int64) (*Skill, error) {
 	var s Skill
+	var proofRaw string
 	err := db.QueryRow(`SELECT s.id, s.owner_id, COALESCE(u.username,''), s.name, s.description,
 		s.category, s.tags, s.version, s.icon, s.file_count, s.total_size,
-		s.download_count, s.view_count, s.rating, s.rating_count, s.created_at, s.updated_at
+		s.download_count, s.view_count, s.rating, s.rating_count, s.created_at, s.updated_at,
+		COALESCE(s.proof_images,'[]')
 		FROM skills s LEFT JOIN users u ON s.owner_id = u.id WHERE s.id = ?`, id).
 		Scan(&s.ID, &s.OwnerID, &s.OwnerName, &s.Name, &s.Description,
 			&s.Category, &s.Tags, &s.Version, &s.Icon, &s.FileCount, &s.TotalSize,
-			&s.DownloadCount, &s.ViewCount, &s.Rating, &s.RatingCount, &s.CreatedAt, &s.UpdatedAt)
+			&s.DownloadCount, &s.ViewCount, &s.Rating, &s.RatingCount, &s.CreatedAt, &s.UpdatedAt,
+			&proofRaw)
 	if err != nil {
 		return nil, err
 	}
+	s.ProofImages = parseProofImages(proofRaw)
 	return &s, nil
+}
+
+// parseProofImages 把数据库中的 JSON 数组字符串解析为图片 URL 列表
+func parseProofImages(s string) []string {
+	if strings.TrimSpace(s) == "" {
+		return nil
+	}
+	var urls []string
+	if err := json.Unmarshal([]byte(s), &urls); err != nil {
+		return nil
+	}
+	return urls
+}
+
+// isImageExt 是否允许作为证明图片的扩展名
+func isImageExt(ext string) bool {
+	switch strings.ToLower(ext) {
+	case ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp":
+		return true
+	}
+	return false
+}
+
+// saveProofImages 保存多张证明图片到 ProofsDir/<skillID>/，返回可访问的 URL 列表
+func saveProofImages(skillID int64, files []*multipart.FileHeader) ([]string, error) {
+	dir := filepath.Join(ProofsDir, fmt.Sprintf("%d", skillID))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, err
+	}
+	urls := []string{}
+	for i, fh := range files {
+		ext := strings.ToLower(filepath.Ext(fh.Filename))
+		if !isImageExt(ext) {
+			continue // 只接受图片，其余忽略
+		}
+		if fh.Size > 10*1024*1024 {
+			continue // 单张超过 10MB 忽略
+		}
+		name := fmt.Sprintf("%d%s", i+1, ext)
+		dst := filepath.Join(dir, name)
+		src, err := fh.Open()
+		if err != nil {
+			return urls, err
+		}
+		d, err := os.Create(dst)
+		if err != nil {
+			src.Close()
+			return urls, err
+		}
+		if _, err := io.Copy(d, src); err != nil {
+			src.Close()
+			d.Close()
+			return urls, err
+		}
+		src.Close()
+		d.Close()
+		urls = append(urls, fmt.Sprintf("/uploads/proofs/%d/%s", skillID, name))
+	}
+	return urls, nil
 }
 
 func nullableInt64(s string) interface{} {

@@ -283,7 +283,8 @@ func mySkills(c *gin.Context) {
 	uid := c.GetInt64("userID")
 	rows, err := db.Query(`SELECT s.id, s.owner_id, COALESCE(u.username,''), s.name, s.description,
 		s.category, s.tags, s.version, s.icon, s.file_count, s.total_size,
-		s.download_count, s.view_count, s.rating, s.created_at, s.updated_at
+		s.download_count, s.view_count, s.rating, s.created_at, s.updated_at,
+		COALESCE(s.proof_images,'[]')
 		FROM skills s LEFT JOIN users u ON s.owner_id = u.id
 		WHERE s.owner_id = ? ORDER BY s.created_at DESC`, uid)
 	if err != nil {
@@ -295,12 +296,15 @@ func mySkills(c *gin.Context) {
 	skills := []Skill{}
 	for rows.Next() {
 		var s Skill
+		var proofRaw string
 		if err := rows.Scan(&s.ID, &s.OwnerID, &s.OwnerName, &s.Name, &s.Description,
 			&s.Category, &s.Tags, &s.Version, &s.Icon, &s.FileCount, &s.TotalSize,
-			&s.DownloadCount, &s.ViewCount, &s.Rating, &s.CreatedAt, &s.UpdatedAt); err != nil {
+			&s.DownloadCount, &s.ViewCount, &s.Rating, &s.CreatedAt, &s.UpdatedAt,
+			&proofRaw); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
+		s.ProofImages = parseProofImages(proofRaw)
 		skills = append(skills, s)
 	}
 	c.JSON(http.StatusOK, gin.H{"data": skills, "total": len(skills)})

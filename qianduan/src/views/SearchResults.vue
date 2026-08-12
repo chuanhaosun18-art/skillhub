@@ -73,6 +73,11 @@ function goBack() {
 function goDetail(id) {
   router.push({ path: `/skill/${id}` })
 }
+
+// 图片加载失败时隐藏该图
+function onProofError(e) {
+  e.target.style.display = 'none'
+}
 </script>
 
 <template>
@@ -146,6 +151,16 @@ function goDetail(id) {
               <el-tag v-for="tag in skill.tags" :key="tag" size="small" type="info" effect="plain">
                 {{ tag }}
               </el-tag>
+            </div>
+            <!-- 评估指标证明图片 -->
+            <div class="proof-row" v-if="skill.proofImages && skill.proofImages.length">
+              <div class="proof-item" v-for="(p, i) in skill.proofImages.slice(0, 3)" :key="i">
+                <img :src="p" :alt="`${skill.name} 评估指标 ${i + 1}`" loading="lazy" @error="onProofError" />
+              </div>
+              <div class="proof-more" v-if="skill.proofImages.length > 3">
+                +{{ skill.proofImages.length - 3 }}
+              </div>
+              <span class="proof-label">评估指标</span>
             </div>
             <div class="card-bottom">
               <div class="owner">
@@ -316,6 +331,51 @@ function goDetail(id) {
   flex-wrap: wrap;
   gap: 8px;
   margin-bottom: 16px;
+}
+
+/* 评估指标证明图片 */
+.proof-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.proof-item {
+  width: 72px;
+  height: 54px;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid #e4e7ed;
+  background: #f5f7fa;
+  flex-shrink: 0;
+}
+
+.proof-item img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.proof-more {
+  width: 72px;
+  height: 54px;
+  border-radius: 6px;
+  border: 1px dashed #dcdfe6;
+  color: #909399;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #fafbfc;
+  flex-shrink: 0;
+}
+
+.proof-label {
+  font-size: 12px;
+  color: #909399;
+  white-space: nowrap;
 }
 
 .card-bottom {
