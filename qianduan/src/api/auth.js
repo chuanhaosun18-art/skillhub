@@ -1,7 +1,8 @@
 // 认证 API 层 + 登录态管理（JWT token 存 localStorage）
+// BASE 为空字符串 = 同源请求，由 vite dev server 代理到后端（见 vite.config.js）
 import { reactive } from 'vue'
 
-const BASE = 'http://localhost:8080'
+const BASE = ''
 const TOKEN_KEY = 'skillhub_token'
 const USER_KEY = 'skillhub_user'
 

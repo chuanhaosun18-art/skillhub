@@ -257,7 +257,7 @@ function renderMarkdown(text) {
 
 function download() {
   if (!skill.value) return
-  window.open(`http://localhost:8080/api/skills/${skill.value.id}/download`, '_blank')
+  window.open(`/api/skills/${skill.value.id}/download`, '_blank')
 }
 
 function goBack() {

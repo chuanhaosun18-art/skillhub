@@ -1,7 +1,9 @@
-// 后端 API 层：Go + Gin + SQLite，地址 http://localhost:8080
+// 后端 API 层：Go + Gin + SQLite。
+// BASE 为空字符串 = 同源请求，由 vite dev server 代理 /api 与 /uploads 到本机后端，
+// 这样队友通过局域网 IP 访问 5173 时无需知道后端地址。
 import { getToken } from './auth'
 
-const BASE = 'http://localhost:8080'
+const BASE = ''
 
 // 后端返回的 skill 字段转换成前端友好的结构
 function normalizeSkill(s) {

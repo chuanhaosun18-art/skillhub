@@ -112,7 +112,7 @@ async function handlePublish() {
   submitting.value = true
   try {
     const skill = await createSkill(fd)
-    ElMessage.success('技能发布成功')
+    ElMessage.success('技能发布成功，已上架市场')
     router.push(`/skill/${skill.id}`)
   } catch (e) {
     ElMessage.error(e.message || '发布失败')
@@ -390,7 +390,7 @@ async function handlePublishGenerated() {
     proofList.value.forEach((p) => fd.append('proof_images', p.raw))
 
     const skill = await createSkill(fd)
-    ElMessage.success('技能发布成功')
+    ElMessage.success('技能发布成功，已上架市场')
     router.push(`/skill/${skill.id}`)
   } catch (e) {
     ElMessage.error(e.message || '发布失败')

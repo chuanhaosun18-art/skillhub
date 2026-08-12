@@ -1,7 +1,7 @@
 // 成长闭环 API 层：目标识别 → 任务工作台 → Skill Creator → 门禁 → 路由 → Trust Card → 反馈升级
 import { getToken, clearAuth } from './auth'
 
-const BASE = 'http://localhost:8080'
+const BASE = ''
 
 async function req(path, { method = 'GET', body } = {}) {
   const headers = {}

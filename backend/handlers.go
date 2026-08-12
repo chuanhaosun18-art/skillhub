@@ -153,12 +153,12 @@ func createSkill(c *gin.Context) {
 	ownerID := c.GetInt64("userID")
 
 	// 创建 skill 记录。
-	// 门禁改造：直接上传 / AI 引导生成属于「路线二」，落地状态为 gated 而不是 published——
-	// 它还没有任何真实执行作为根，必须先在工作台跑一次真实任务，并通过发布前四问才能进市场。
+	// 「上传即进市场」：队友通过网页上传的技能直接上架，无需走门禁。
+	// 若将来要恢复门禁，把这里改回 SkillStatusGated 即可。
 	result, err := db.Exec(`INSERT INTO skills (owner_id, name, description, category, tags, version,
 		status, origin, maintainer_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		ownerID, name, description, category, tags, version,
-		SkillStatusGated, OriginRouteTwo, ownerID)
+		SkillStatusPublished, OriginRouteTwo, ownerID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -210,15 +210,10 @@ func createSkill(c *gin.Context) {
 	}
 	c.JSON(http.StatusCreated, gin.H{
 		"data":   skill,
-		"status": SkillStatusGated,
+		"status": SkillStatusPublished,
 		"gate": gin.H{
-			"published": false,
-			"message":   "已保存，但还没有进市场。它现在是靠描述生成的，缺一个真实执行作为根。",
-			"next_steps": []string{
-				"用它在任务工作台做一次真实任务",
-				"补齐关键判断与适用边界",
-				"跑发布前四问（边界停机必须 100%）",
-			},
+			"published": true,
+			"message":   "已发布并上架市场，所有人现在都可以搜索到它。",
 		},
 	})
 }
