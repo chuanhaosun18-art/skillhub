@@ -419,12 +419,18 @@ func completeExecution(c *gin.Context) {
 
 	// 完成后若该次执行含关键判断，则可以固化
 	exec, _ = loadExecution(id)
-	c.JSON(http.StatusOK, gin.H{
+	resp := gin.H{
 		"data":              exec,
 		"completion_signal": signal,
 		"can_distill":       canDistill(exec),
 		"distill_hint":      distillHint(exec),
-	})
+	}
+	// 反向通道：告诉用户这件事在哪条长路上的第几周。
+	// 这是任务态用户知道编排态存在的唯一入口——没有它，用户做完一件事就走了（v1.2 第 3 条）。
+	if s := suggestOrchestration(exec.TaskIntent); s != nil {
+		resp["orchestration_suggestion"] = s
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 // abandonExecution POST /api/growth/executions/:id/abandon
@@ -588,10 +594,17 @@ func autoAbandonIfIdle(e *Execution) {
 }
 
 // canDistill 一次执行是否可以固化为 Skill。
+//
 // 硬约束：0 个关键判断的执行不可固化——没有判断就没有可蒸馏的内容。
+// 但这条只对「可生产类」intent 生效：模拟面试、面试复盘、内容脚本本质是练习，
+// 一次练习里没有「什么时候切换策略」这种判断，对它们要求判断会让用户永远卡住
+// 且不知道自己做错了什么（PRD v1.2 第 4 条）。
 func canDistill(e *Execution) bool {
 	if e.Status != ExecCompleted {
 		return false
+	}
+	if !isProductive(e.TaskIntent) {
+		return false // 只消费类不产出 Skill，也不提示固化
 	}
 	return countDecidedSteps(e) >= 1
 }
@@ -599,6 +612,9 @@ func canDistill(e *Execution) bool {
 func distillHint(e *Execution) string {
 	if e.Status != ExecCompleted {
 		return "任务完成后才能固化"
+	}
+	if !isProductive(e.TaskIntent) {
+		return "这类任务是练习，不产出方法——练完就好，不需要固化。"
 	}
 	if countDecidedSteps(e) < 1 {
 		return "这次执行没有产生任何关键判断，没有可以沉淀的方法。下次遇到岔路口时停下来选一次，就能固化了。"

@@ -415,12 +415,14 @@ func routeSkills(c *gin.Context) {
 	results := []gin.H{}
 	for i, rc := range top {
 		item := gin.H{
-			"skill_id":   rc.SkillID,
-			"name":       rc.Name,
-			"version":    rc.Version,
-			"why_this":   explainWhy(rc),
-			"evidence":   evidenceFor(rc),
-			"risk":       gin.H{"permissions": rc.Permissions, "irreversible": rc.Irreversible},
+			"skill_id": rc.SkillID,
+			"name":     rc.Name,
+			"version":  rc.Version,
+			"why_this": explainWhy(rc),
+			// choose_if：砍掉综合分之后，用户需要一个自己能判断的条件来选（v1.2 第 6 条）
+			"choose_if": chooseIf(rc),
+			"evidence":  evidenceFor(rc),
+			"risk":      gin.H{"permissions": rc.Permissions, "irreversible": rc.Irreversible},
 		}
 		if i == 0 && runnerUp != nil && runnerUp.SkillID != rc.SkillID {
 			item["why_not_alternative"] = explainWhyNot(*runnerUp)
@@ -502,6 +504,48 @@ func explainWhy(rc routeCandidate) string {
 		return "与你现在要做的这件事最接近"
 	}
 	return strings.Join(parts, "，")
+}
+
+// chooseIf 一句「选它取决于什么」。
+//
+// 砍掉综合分是对的，但产生了一个真实的可用性问题：五个候选各有一堆维度，
+// 用户只能依赖「系统替我排的序」，而对系统排序的信任本来就不高。
+// 所以给一个用户自己能判断的条件——不是平台内部指标（质量分高不高、样本多不多），
+// 而是他看一眼自己的处境就能回答的问题（材料齐不齐、有没有经历、时间够不够）。
+func chooseIf(rc routeCandidate) string {
+	// 依据该 Skill 的流程起点判断它假设了什么前提
+	var versionID int64
+	db.QueryRow(`SELECT COALESCE(current_version_id,0) FROM skills WHERE id = ?`, rc.SkillID).Scan(&versionID)
+	if versionID == 0 {
+		return ""
+	}
+	ver, err := loadSkillVersion(versionID)
+	if err != nil {
+		return ""
+	}
+	var steps []struct {
+		Index int    `json:"index"`
+		Title string `json:"title"`
+	}
+	json.Unmarshal([]byte(ver.Workflow), &steps)
+	if len(steps) == 0 {
+		return ""
+	}
+	first := steps[0].Title
+
+	// 第一步是"盘点/收集"类 → 适合还没准备好的人；否则适合材料已就绪的人
+	inventoryWords := []string{"盘", "收集", "整理", "梳理", "清点", "找出", "列出"}
+	isInventory := false
+	for _, w := range inventoryWords {
+		if strings.Contains(first, w) {
+			isInventory = true
+			break
+		}
+	}
+	if isInventory {
+		return "如果你连手上有哪些材料都还没盘清，选这个——它第一步就是帮你盘点。"
+	}
+	return "如果你手上材料已经比较全，选这个——它直接从取舍开始，不重复做盘点。"
 }
 
 // explainWhyNot 为什么没选另一个——平台辨别力的可见形式

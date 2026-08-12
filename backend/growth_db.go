@@ -48,13 +48,98 @@ var AllowedIntents = map[string]string{
 	IntentContentScript:    "内容脚本与选题结构",
 }
 
-// RejectedIntents 五类伪需求 → 拒绝策略说明
+// ProductiveIntents 可生产类：判断密集，可固化为 Skill。
+// 只消费类（模拟面试、面试复盘、内容脚本）本质是练习，不产出方法——
+// 对它们要求「至少一个关键判断」会让用户永远卡住且不知道为什么（PRD v1.2 第 4 条）。
+var ProductiveIntents = map[string]bool{
+	IntentThesisTopic:      true,
+	IntentResumeRewrite:    true,
+	IntentResumeJDAlign:    true,
+	IntentReportStructure:  true,
+	IntentProjectConverge:  true,
+	IntentLiteratureReview: true,
+}
+
+// isProductive 该 intent 是否可固化为 Skill
+func isProductive(intent string) bool {
+	return ProductiveIntents[intent]
+}
+
+// ---------- 编排态（PRD v1.1 F17 / v1.2 修订） ----------
+
+// 编排类 intent
+const (
+	IntentDirectionCommitted = "direction_committed" // 已决定方向，要编排
+)
+
+// OrchestrationIntents 可编排的方向
+var OrchestrationIntents = map[string]string{
+	"postgrad_recommend": "保研准备",
+	"postgrad_exam":      "考研准备",
+	"study_abroad":       "出国申请",
+	"job_season":         "求职季",
+	"research_entry":     "进组做科研",
+	"competition_season": "竞赛季",
+}
+
+// Path 可信度分级（v1.2 第 1 条）。
+// 决定这条 Path 能对外给什么信息——回忆整理来的不给耗时分布与卡点统计。
+const (
+	ProvenanceObserved      = "observed"
+	ProvenanceRetrospective = "retrospective"
+)
+
+// 编排与编排项状态
+const (
+	OrchDrafting  = "drafting"
+	OrchActive    = "active"
+	OrchPaused    = "paused"
+	OrchCompleted = "completed"
+	OrchAbandoned = "abandoned"
+)
+
+const (
+	ItemTodo    = "todo"
+	ItemDone    = "done"
+	ItemSkipped = "skipped"
+	ItemExpired = "expired"
+)
+
+// 证据类型（v1.2：轨迹补录）
+const (
+	ProofPlatformTrace  = "platform_trace"
+	ProofArtifactUpload = "artifact_upload"
+	ProofSelfReport     = "self_report"
+)
+
+// 编排相关阈值
+const (
+	OrchMinItems          = 3
+	OrchMaxItems          = 40
+	OrchMinWeeks          = 2
+	OrchMaxWeeks          = 26
+	OrchInterviewMaxRound = 5
+	OrchPauseAfterWeeks   = 3    // 连续几周未复核转 paused
+	PathMinNodesForOrch   = 3    // 一条 Path 至少几个节点才够做编排来源
+	BackfillScoreCap      = 0.85 // 轨迹补录的蒸馏度上限（v1.2 第 2 条）
+	ColdStartCallCount    = 20   // 低于此调用量走冷启动反馈门槛（v1.2 第 5 条）
+)
+
+// RejectedIntents 拒绝态（v1.2 后只剩两类真正全拦）
+//
+// v1.1 之前这里有五类。修正的原因是：把「结果不可控」当成了「整件事不能做」。
+// 保研的名额不可控，但保研准备的时间线高度可复用——那部分进编排态（见 growth_orchestration.go）。
 var RejectedIntents = map[string]string{
 	IntentEmotionalSupport: "情绪与心理类需求真实但不适合拆成流程与完成标准，我们不做成 Skill。",
-	IntentLifeDecision:     "这类选择没有可判断的完成标准，做成 Skill 等于算命。我们只展示别人真实走过的分支与代价。",
-	IntentZeroSum:          "结果由分配规则和他人表现决定，个人方法的影响无法归因，我们不做承诺型能力。",
-	IntentRealtimeFact:     "Skill 保存的是行动方法而不是事实，做成 Skill 第二天就会过期。",
-	IntentResourceDep:      "关键变量（人脉、名额、他人意愿）不可转移，方法给了也执行不了。",
+	IntentLifeDecision:     "这类选择没有可判断的完成标准，给建议等于算命。我们只展示别人真实走过的分支与各自代价。",
+	IntentRealtimeFact:     "Skill 保存的是行动方法而不是事实，做成 Skill 第二天就会过期。它在编排里作为截止日依据存在。",
+}
+
+// OrchestrationRouteIntents 编排态：不进任务流、不产出 Skill，但给带时间的编排
+var OrchestrationRouteIntents = map[string]string{
+	IntentZeroSum:            "postgrad_recommend",
+	IntentResourceDep:        "research_entry",
+	IntentDirectionCommitted: "postgrad_recommend",
 }
 
 // decision 四个槽位
@@ -200,6 +285,7 @@ type SkillVersion struct {
 	Gotchas            string     `json:"gotchas"`
 	DistillationScore  float64    `json:"distillation_score"`
 	DistillationDetail string     `json:"distillation_detail"`
+	ProofType          string     `json:"proof_type"`
 	Changelog          string     `json:"changelog,omitempty"`
 	PublishedAt        *time.Time `json:"published_at,omitempty"`
 	CreatedAt          time.Time  `json:"created_at"`
@@ -390,6 +476,85 @@ CREATE TABLE IF NOT EXISTS description_corpus (
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
+-- ---------- 编排态（F17）----------
+-- Path：多次执行串成的顺序与节奏，编排态的供给物。
+-- provenance 决定它能对外给什么信息：retrospective 只给顺序，不给耗时与卡点。
+CREATE TABLE IF NOT EXISTS paths (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  goal_label TEXT NOT NULL,
+  orchestration_intent TEXT DEFAULT '',
+  owner_user_id INTEGER,
+  provenance TEXT NOT NULL DEFAULT 'retrospective',
+  walked_count INTEGER DEFAULT 0,
+  branch_summary TEXT DEFAULT '{}',
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS path_nodes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  path_id INTEGER NOT NULL,
+  node_index INTEGER NOT NULL,
+  label TEXT NOT NULL,
+  task_intent TEXT DEFAULT '',
+  week_offset INTEGER DEFAULT 0,
+  typical_duration_days INTEGER,
+  common_blocker TEXT DEFAULT '',
+  controllable INTEGER DEFAULT 1,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS orchestrations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  orchestration_intent TEXT NOT NULL,
+  goal_label TEXT NOT NULL,
+  context TEXT DEFAULT '{}',
+  horizon_weeks INTEGER NOT NULL DEFAULT 8,
+  status TEXT NOT NULL DEFAULT 'drafting',
+  branch_summary TEXT DEFAULT '',
+  source_path_ids TEXT DEFAULT '[]',
+  adopted_at DATETIME,
+  last_review_at DATETIME,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- source_path_id NOT NULL 是这张表最重要的一条约束：
+-- 它在数据库层面保证编排不可能凭空生成（PRD 不可妥协清单第 11 条）。
+CREATE TABLE IF NOT EXISTS orchestration_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  orchestration_id INTEGER NOT NULL,
+  week_index INTEGER NOT NULL,
+  title TEXT NOT NULL,
+  why_now TEXT DEFAULT '',
+  due_date TEXT DEFAULT '',
+  deadline_source TEXT DEFAULT '',
+  controllable INTEGER NOT NULL DEFAULT 1,
+  source_path_id INTEGER NOT NULL,
+  source_path_node_id INTEGER,
+  linked_task_intent TEXT DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'todo',
+  done_at DATETIME,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS orchestration_reviews (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  orchestration_id INTEGER NOT NULL,
+  week_index INTEGER NOT NULL,
+  done_count INTEGER DEFAULT 0,
+  total_count INTEGER DEFAULT 0,
+  expired_count INTEGER DEFAULT 0,
+  replanned INTEGER DEFAULT 0,
+  note TEXT DEFAULT '',
+  reviewed_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_paths_intent ON paths(orchestration_intent);
+CREATE INDEX IF NOT EXISTS idx_pnodes_path ON path_nodes(path_id, node_index);
+CREATE INDEX IF NOT EXISTS idx_orch_user ON orchestrations(user_id, status);
+CREATE INDEX IF NOT EXISTS idx_oitems_orch ON orchestration_items(orchestration_id, week_index);
+CREATE INDEX IF NOT EXISTS idx_orev_orch ON orchestration_reviews(orchestration_id);
+
 CREATE INDEX IF NOT EXISTS idx_exec_user ON executions(user_id);
 CREATE INDEX IF NOT EXISTS idx_exec_skill ON executions(skill_version_id);
 CREATE INDEX IF NOT EXISTS idx_steps_exec ON execution_steps(execution_id, step_index);
@@ -416,6 +581,8 @@ CREATE INDEX IF NOT EXISTS idx_corpus_intent ON description_corpus(task_intent);
 		"ALTER TABLE skills ADD COLUMN quality_score REAL DEFAULT 0",
 		// 个人成长主页的可见性开关（JSON）。默认空 = 全部不公开。
 		"ALTER TABLE users ADD COLUMN profile_visibility TEXT DEFAULT ''",
+		// v1.2：证据来源类型。artifact_upload（轨迹补录）的蒸馏度封顶 0.85。
+		"ALTER TABLE skill_versions ADD COLUMN proof_type TEXT DEFAULT 'platform_trace'",
 	}
 	for _, m := range growthMigrations {
 		if _, err := db.Exec(m); err != nil {
@@ -426,7 +593,65 @@ CREATE INDEX IF NOT EXISTS idx_corpus_intent ON description_corpus(task_intent);
 	}
 
 	seedCorpus()
+	seedPaths()
 	log.Println("growth schema initialized")
+}
+
+// seedPaths 预置一条保研 Path 作为编排态的来源。
+//
+// 这里必须诚实：它的 provenance 是 retrospective —— 学长回忆整理的，不是平台内观测到的。
+// Path 跨越数月，冷启动期不可能有 observed 数据，这是编排态无法回避的矛盾（PRD v1.2 第 1 条）。
+// 因此 retrospective 只给节点顺序，不给耗时分布与卡点统计，界面上必须标注来源。
+func seedPaths() {
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM paths`).Scan(&n); err != nil || n > 0 {
+		return
+	}
+	branch := map[string]interface{}{
+		"walked": 12,
+		"branches": []map[string]interface{}{
+			{"label": "进入夏令营", "count": 7},
+			{"label": "转向考研", "count": 3, "note": "多在第 5 周确认绩点排名之后"},
+			{"label": "中途停下", "count": 2},
+		},
+		"note": "以上为口述统计，来自 12 位学长的回忆整理",
+	}
+	res, err := db.Exec(`INSERT INTO paths (goal_label, orchestration_intent, provenance, walked_count, branch_summary)
+		VALUES (?, 'postgrad_recommend', ?, 12, ?)`,
+		"保研到本校或同层次院校", ProvenanceRetrospective, jsonOrEmpty(branch))
+	if err != nil {
+		log.Printf("seed path failed: %v", err)
+		return
+	}
+	pathID, _ := res.LastInsertId()
+
+	nodes := []struct {
+		Label        string
+		Intent       string
+		WeekOffset   int
+		Controllable bool
+	}{
+		{"盘清手上能拿出来的东西：课程排名、科研经历、竞赛、语言成绩", "", 1, true},
+		{"把三段经历各写成一句可验证的结果", IntentResumeRewrite, 1, true},
+		{"确定目标院校与方向清单，分成冲稳保三档", "", 2, true},
+		{"写第一封联系导师的邮件并发出", IntentResourceDep, 3, true},
+		{"准备夏令营申请材料并投递", "", 3, true},
+		{"绩点排名结果公布", "", 5, false},
+		{"根据排名重排目标清单", "", 5, true},
+		{"准备面试：自我介绍与科研经历问答", IntentMockInterview, 6, true},
+		{"夏令营面试", "", 7, false},
+		{"面试复盘，为下一轮调整", IntentInterviewReview, 8, true},
+	}
+	for i, nd := range nodes {
+		ctrl := 1
+		if !nd.Controllable {
+			ctrl = 0
+		}
+		db.Exec(`INSERT INTO path_nodes (path_id, node_index, label, task_intent, week_offset, controllable)
+			VALUES (?, ?, ?, ?, ?, ?)`,
+			pathID, i+1, nd.Label, nd.Intent, nd.WeekOffset, ctrl)
+	}
+	log.Printf("seeded retrospective path %d with %d nodes", pathID, len(nodes))
 }
 
 // seedCorpus 预置一批真实用户表达，供可发现性测试使用。

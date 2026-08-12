@@ -89,6 +89,19 @@
           >
             把这次的方法固化下来
           </el-button>
+
+          <!-- 反向通道：让任务态用户知道编排态存在。没有这一步，用户做完就走了 -->
+          <div v-if="orchSuggestion" class="orch-tip">
+            <div class="orch-tip-text">{{ orchSuggestion.message }}</div>
+            <el-button
+              size="small"
+              text
+              type="primary"
+              @click="$router.push({ path: '/orchestration', query: { intent: orchSuggestion.orchestration_intent } })"
+            >
+              {{ orchSuggestion.cta }}
+            </el-button>
+          </div>
         </div>
       </div>
     </aside>
@@ -249,6 +262,7 @@ const saving = ref(false)
 const distilling = ref(false)
 
 const pending = ref(null)
+const orchSuggestion = ref(null)
 const picked = ref('')
 const decisionNote = ref('')
 const handoff = ref('')
@@ -425,6 +439,7 @@ async function finish() {
     })
     canDistill.value = !!res.can_distill
     distillHint.value = res.distill_hint || ''
+    orchSuggestion.value = res.orchestration_suggestion || null
     await load()
     ElMessage.success('已完成')
   } catch (e) {
@@ -515,6 +530,20 @@ onMounted(load)
   color: #e6a23c;
   line-height: 1.6;
   margin: 0 0 8px;
+}
+/* 反向通道提示：卡片式、不弹窗、不打断固化流程 */
+.orch-tip {
+  margin-top: 12px;
+  padding: 10px 12px;
+  background: #f7fbff;
+  border: 1px solid #c6e2ff;
+  border-radius: 8px;
+}
+.orch-tip-text {
+  font-size: 12px;
+  color: #606266;
+  line-height: 1.7;
+  margin-bottom: 6px;
 }
 .empty {
   background: #fff;

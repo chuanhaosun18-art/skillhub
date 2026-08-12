@@ -29,6 +29,10 @@ type distillDetail struct {
 	Decisions float64 `json:"decisions"`
 	Failures  float64 `json:"failures"`
 	Boundary  float64 `json:"boundary"`
+	// ProofType 决定总分上限。轨迹补录封顶 0.85——能发布但拿不到满分，
+	// 这样既承认用户会在平台外做事，又保住了「进工作台更可信」的激励结构（v1.2 第 2 条）。
+	ProofType string  `json:"proof_type"`
+	Cap       float64 `json:"cap"`
 }
 
 // 权重（PRD F5.3）
@@ -42,8 +46,21 @@ const (
 )
 
 func (d distillDetail) total() float64 {
-	return clamp01(d.RealTask*wRealTask + d.Outcome*wOutcome + d.Workflow*wWorkflow +
+	raw := clamp01(d.RealTask*wRealTask + d.Outcome*wOutcome + d.Workflow*wWorkflow +
 		d.Decisions*wDecisions + d.Failures*wFailures + d.Boundary*wBoundary)
+	if d.ProofType == ProofArtifactUpload && raw > BackfillScoreCap {
+		return BackfillScoreCap
+	}
+	return raw
+}
+
+// capNote 封顶时给界面的说明，避免用户以为是自己填得不够
+func (d distillDetail) capNote() string {
+	if d.ProofType == ProofArtifactUpload {
+		return fmt.Sprintf("这是补录的经历，蒸馏度上限 %.2f。想拿满分就在工作台里做一次——有执行轨迹的证据更硬。",
+			BackfillScoreCap)
+	}
+	return ""
 }
 
 // publishable 三条同时满足才允许发布；边界是硬性项，不接受折中
@@ -87,9 +104,19 @@ var dimensionLabels = map[string]string{
 // computeDistill 依据草稿现状打分。模型只做归类，加权一律在后端算，保证可解释可测试。
 func computeDistill(exec *Execution, v *SkillVersion, decisions []Decision) distillDetail {
 	var d distillDetail
+	d.ProofType = v.ProofType
+	if d.ProofType == "" {
+		d.ProofType = ProofPlatformTrace
+	}
+	d.Cap = 1
+	if d.ProofType == ProofArtifactUpload {
+		d.Cap = BackfillScoreCap
+	}
 
-	// 真实任务：平台内轨迹 ≥5 步得满分
-	if exec != nil && len(exec.Steps) >= 5 {
+	// 真实任务：平台内轨迹 ≥5 步得满分；补录只给 0.5
+	if d.ProofType == ProofArtifactUpload {
+		d.RealTask = 0.5
+	} else if exec != nil && len(exec.Steps) >= 5 {
 		d.RealTask = 1
 	} else if exec != nil && len(exec.Steps) > 0 {
 		d.RealTask = 0.5
@@ -355,6 +382,138 @@ func extractFromTrace(exec *Execution) (*extractResult, error) {
 		return &res, nil
 	}
 	return nil, lastErr
+}
+
+// ---------- F5.3b 轨迹补录（v1.2 新增） ----------
+
+// backfillExecution POST /api/growth/backfill
+//
+// 承认一件事：用户会在平台外做事。改简历用 Word、改选题在纸上跟导师聊，工具习惯很强。
+// 如果不进工作台就什么都拿不到，早期用户会直接流失。
+// 所以给降级路径，但不给平权——蒸馏度封顶 0.85，想拿满分就进工作台。
+func backfillExecution(c *gin.Context) {
+	uid := c.GetInt64("userID")
+	var body struct {
+		TaskIntent string `json:"task_intent"`
+		TaskTitle  string `json:"task_title"`
+		Before     string `json:"before"` // 做之前的产物
+		After      string `json:"after"`  // 做之后的产物
+		Decisions  []struct {
+			Slot          string `json:"slot"`
+			TriggerSignal string `json:"trigger_signal"`
+			Judgment      string `json:"judgment"`
+			Scope         string `json:"scope"`
+			StageIndex    int    `json:"stage_index"` // 用户自述的阶段序号
+		} `json:"decisions"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
+		return
+	}
+	if !isProductive(body.TaskIntent) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "这类任务不产出方法，不需要补录"})
+		return
+	}
+	if strings.TrimSpace(body.After) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "至少要有做完之后的产物"})
+		return
+	}
+
+	// 建一条已完成的执行记录，标记为补录来源
+	snapshot := gin.H{}
+	if u, err := getUserByID(uid); err == nil {
+		snapshot = gin.H{"school": u.School, "major": u.Major, "grade": u.Grade}
+	}
+	input := gin.H{"goal": body.TaskTitle, "material": body.Before}
+	signal := gin.H{
+		"exported":       true,
+		"artifact_delta": artifactDelta(body.Before, body.After),
+		"manual_rework":  false,
+		"backfilled":     true,
+	}
+	res, err := db.Exec(`INSERT INTO executions (user_id, task_intent, task_title, user_context,
+		input, output, status, completion_signal, ended_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+		uid, body.TaskIntent, strings.TrimSpace(body.TaskTitle), jsonOrEmpty(snapshot),
+		jsonOrEmpty(input), body.After, ExecCompleted, jsonOrEmpty(signal))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	execID, _ := res.LastInsertId()
+
+	// 用自述阶段生成占位轨迹。标题里写明是补录，审计时一眼能看出来。
+	insertStep(execID, 0, StepAIAction, "补录：做之前", "", "", "", nil, body.Before, body.Before, 0)
+	insertStep(execID, 1, StepAIAction, "补录：做之后", "", "", "", nil, "", body.After, 0)
+
+	// 建 Skill 与版本，proof_type 标为补录
+	name := strings.TrimSpace(body.TaskTitle)
+	if name == "" {
+		name = AllowedIntents[body.TaskIntent]
+	}
+	skillRes, err := db.Exec(`INSERT INTO skills (owner_id, name, description, category, tags, version,
+		status, task_intent, origin, maintainer_id) VALUES (?, ?, '', ?, '[]', '1.0', ?, ?, ?, ?)`,
+		uid, name, AllowedIntents[body.TaskIntent], SkillStatusDraft, body.TaskIntent, OriginRouteTwo, uid)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	skillID, _ := skillRes.LastInsertId()
+
+	boundary := map[string]interface{}{
+		"not_applicable": []string{}, "handoff_trigger": []string{}, "fallback_path": "",
+	}
+	contract := map[string]interface{}{
+		"input": "任务材料", "output": "可提交的产物", "permissions": []string{"read_upload"},
+	}
+	verRes, err := db.Exec(`INSERT INTO skill_versions (skill_id, version, description, goal,
+		done_criteria, workflow, boundary, contract, gotchas, source_execution_id, proof_type)
+		VALUES (?, '1.0', '', ?, '[]', '[]', ?, ?, '[]', ?, ?)`,
+		skillID, body.TaskTitle, jsonOrEmpty(boundary), jsonOrEmpty(contract), execID, ProofArtifactUpload)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	versionID, _ := verRes.LastInsertId()
+	db.Exec(`UPDATE skills SET current_version_id = ? WHERE id = ?`, versionID, skillID)
+
+	// 用户自己填的判断：source_step_index 指向自述阶段序号，并且仍然要求三项齐全
+	kept := 0
+	for _, d := range body.Decisions {
+		if !isValidSlot(d.Slot) {
+			continue
+		}
+		if strings.TrimSpace(d.TriggerSignal) == "" || strings.TrimSpace(d.Judgment) == "" ||
+			strings.TrimSpace(d.Scope) == "" {
+			continue
+		}
+		idx := d.StageIndex
+		if idx < 0 || idx > 1 {
+			idx = 1
+		}
+		db.Exec(`INSERT INTO decisions (experience_exec_id, skill_id, slot, trigger_signal, judgment,
+			scope, source_step_index) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			execID, skillID, d.Slot, d.TriggerSignal, d.Judgment, d.Scope, idx)
+		kept++
+	}
+
+	// 四槽全空就只落 Insight，不允许成为 Skill
+	if kept == 0 {
+		db.Exec(`INSERT INTO insights (execution_id, user_id, claim, why, missing_for_skill)
+			VALUES (?, ?, ?, ?, ?)`,
+			execID, uid, name, "补录了产物但没有说清关键判断",
+			jsonOrEmpty([]string{"至少填一条关键判断才能成为可复用的方法"}))
+		db.Exec(`UPDATE skills SET status = ? WHERE id = ?`, SkillStatusInsightOnly, skillID)
+		c.JSON(http.StatusOK, gin.H{
+			"message":       "先存成经验笔记",
+			"still_missing": []string{"至少填一条关键判断（出现什么信号、就要怎么做、在什么场景成立）"},
+			"execution_id":  execID,
+		})
+		return
+	}
+
+	log.Printf("backfill: exec=%d skill=%d decisions=%d", execID, skillID, kept)
+	respondDraftWithStats(c, versionID, kept, 0)
 }
 
 // ---------- 草稿读写 ----------
@@ -879,11 +1038,12 @@ func loadSkillVersion(versionID int64) (*SkillVersion, error) {
 	var v SkillVersion
 	var published sql.NullTime
 	err := db.QueryRow(`SELECT id, skill_id, version, description, goal, done_criteria, workflow,
-		boundary, contract, gotchas, distillation_score, distillation_detail, changelog, published_at, created_at
+		boundary, contract, gotchas, distillation_score, distillation_detail,
+		COALESCE(proof_type,'platform_trace'), changelog, published_at, created_at
 		FROM skill_versions WHERE id = ?`, versionID).
 		Scan(&v.ID, &v.SkillID, &v.Version, &v.Description, &v.Goal, &v.DoneCriteria, &v.Workflow,
 			&v.Boundary, &v.Contract, &v.Gotchas, &v.DistillationScore, &v.DistillationDetail,
-			&v.Changelog, &published, &v.CreatedAt)
+			&v.ProofType, &v.Changelog, &published, &v.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -984,6 +1144,9 @@ func respondDraftWithStats(c *gin.Context, versionID int64, kept, dropped int) {
 			"lowest":        detail.lowest(),
 			"lowest_label":  dimensionLabels[detail.lowest()],
 			"labels":        dimensionLabels,
+			"proof_type":    detail.ProofType,
+			"cap":           detail.Cap,
+			"cap_note":      detail.capNote(),
 		},
 		"corpus_candidates": corpusFor(ver.SkillID, 10),
 	}

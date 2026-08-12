@@ -187,7 +187,63 @@ export function updateVisibility(patch) {
   return req('/my-profile/visibility', { method: 'PATCH', body: patch })
 }
 
+/* ---------- F17 编排态 ---------- */
+
+/** 前置检查：这条路有没有人走完过。没有就不生成编排 */
+export function probeOrchestration(utterance, orchestrationIntent) {
+  return req('/orch-probe', {
+    method: 'POST',
+    body: { utterance, orchestration_intent: orchestrationIntent },
+  })
+}
+
+/** 上下文访谈一轮 */
+export function interviewOrchestration(payload) {
+  return req('/orch-interview', { method: 'POST', body: payload })
+}
+
+export function createOrchestration(payload) {
+  return req('/orchestrations', { method: 'POST', body: payload })
+}
+
+export function listMyOrchestrations() {
+  return req('/orchestrations')
+}
+
+export function getOrchestration(id) {
+  return req(`/orchestrations/${id}`)
+}
+
+export function adoptOrchestration(id) {
+  return req(`/orchestrations/${id}/adopt`, { method: 'POST' })
+}
+
+export function updateOrchItem(id, itemId, patch) {
+  return req(`/orchestrations/${id}/items/${itemId}`, { method: 'PATCH', body: patch })
+}
+
+/** 周复核：产出「节奏有没有跟上」这个行为信号 */
+export function reviewOrchestration(id, payload) {
+  return req(`/orchestrations/${id}/reviews`, { method: 'POST', body: payload })
+}
+
+/* ---------- F5.3b 轨迹补录 ---------- */
+
+/** 在平台外做完的事补录进来。蒸馏度上限 0.85 */
+export function backfillExecution(payload) {
+  return req('/backfill', { method: 'POST', body: payload })
+}
+
 /* ---------- 常量 ---------- */
+
+export const ORCHESTRATION_INTENTS = [
+  { value: 'postgrad_recommend', label: '保研准备' },
+  { value: 'postgrad_exam', label: '考研准备' },
+  { value: 'study_abroad', label: '出国申请' },
+  { value: 'job_season', label: '求职季' },
+  { value: 'research_entry', label: '进组做科研' },
+  { value: 'competition_season', label: '竞赛季' },
+]
 
 /** 允许进入任务流的任务类型（与后端 AllowedIntents 保持一致） */
 export const TASK_INTENTS = [

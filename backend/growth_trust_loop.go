@@ -134,16 +134,22 @@ func getTrustCard(c *gin.Context) {
 	if ver != nil {
 		var srcExec sql.NullInt64
 		db.QueryRow(`SELECT source_execution_id FROM skill_versions WHERE id = ?`, ver.ID).Scan(&srcExec)
-		if srcExec.Valid && srcExec.Int64 > 0 {
+		// 补录来源必须明确标注，不能和平台内轨迹混为一谈（v1.2 硬约束 15）
+		if ver.ProofType == ProofArtifactUpload {
+			evidence["source"] = gin.H{
+				"kind": ProofArtifactUpload,
+				"note": "来源为补录，无执行轨迹。判断由创作者自述，蒸馏度上限 0.85。",
+			}
+		} else if srcExec.Valid && srcExec.Int64 > 0 {
 			var stepCount int
 			db.QueryRow(`SELECT COUNT(*) FROM execution_steps WHERE execution_id = ?`, srcExec.Int64).Scan(&stepCount)
 			evidence["source"] = gin.H{
-				"kind":       "platform_trace",
+				"kind":       ProofPlatformTrace,
 				"step_count": stepCount,
 				"note":       "来自一次平台内真实执行，原始材料不公开",
 			}
 		} else {
-			evidence["source"] = gin.H{"kind": "self_report", "note": "尚无平台内执行轨迹作为根"}
+			evidence["source"] = gin.H{"kind": ProofSelfReport, "note": "尚无平台内执行轨迹作为根"}
 		}
 	}
 	out["evidence"] = evidence
@@ -455,13 +461,24 @@ func checkVersionTriggers(skillID int64) (bool, string, int) {
 	}
 	defer rows.Close()
 
+	// 冷启动门槛（v1.2 第 5 条）：标准规则要求 3 次 + 3 个用户，
+	// 但早期一个 Skill 总共可能只有 5 次调用，那条闭环永远不会自动触发。
+	// 调用量不足时降到 2 次 + 2 个用户——降低门槛但不降低"要有独立验证"这个要求。
+	var callCount int
+	db.QueryRow(`SELECT COUNT(*) FROM executions WHERE skill_version_id IN
+		(SELECT id FROM skill_versions WHERE skill_id = ?)`, skillID).Scan(&callCount)
+	needCount, needUsers := 3, 3
+	if callCount < ColdStartCallCount {
+		needCount, needUsers = 2, 2
+	}
+
 	for rows.Next() {
 		var issueType string
 		var count, users int
 		if rows.Scan(&issueType, &count, &users) != nil {
 			continue
 		}
-		if count >= 3 && users >= 3 {
+		if count >= needCount && users >= needUsers {
 			// 已有 open 候选则不重复创建
 			var existing int
 			db.QueryRow(`SELECT COUNT(*) FROM version_candidates WHERE skill_id = ? AND status = 'open'`, skillID).
