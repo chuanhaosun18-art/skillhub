@@ -7,12 +7,42 @@
 /* ---------------- 会话内状态 ---------------- */
 var State = {
   coins: DB.user.coins,
-  runs: DB.runs.slice(),          // 运行实例
-  purchased: { s14: true },       // 已购付费 skill（mock：简历模板已购）
-  published: [],                  // 本次会话发布的 skill
-  wished: {},                     // 许愿池点击记录
+  runs: [],
+  purchased: {},
+  published: [],
+  wished: {},
   poolCount: Object.keys(DB.skills).length
 };
+var activeRunId = '';
+
+function persistRuns() {
+  try {
+    localStorage.setItem('wow_runs', JSON.stringify({
+      runs: State.runs, activeRunId: activeRunId, coins: State.coins, purchased: State.purchased
+    }));
+  } catch (e) { /* ignore */ }
+}
+function restoreRuns() {
+  try {
+    var raw = JSON.parse(localStorage.getItem('wow_runs') || 'null');
+    if (!raw || !raw.runs) return;
+    State.runs = raw.runs.filter(function (r) { return r && r.skillId && DB.skills[r.skillId]; });
+    State.purchased = raw.purchased || {};
+    if (typeof raw.coins === 'number') State.coins = raw.coins;
+    activeRunId = raw.activeRunId || '';
+  } catch (e) { /* ignore */ }
+}
+restoreRuns();
+function persistWished() {
+  try { localStorage.setItem('wow_wished', JSON.stringify(State.wished)); } catch (e) { /* ignore */ }
+}
+function restoreWished() {
+  try {
+    var raw = JSON.parse(localStorage.getItem('wow_wished') || 'null');
+    if (raw && typeof raw === 'object') State.wished = raw;
+  } catch (e) { /* ignore */ }
+}
+restoreWished();
 
 /* ---------------- 工具 ---------------- */
 function $(s, root) { return (root || document).querySelector(s); }
@@ -74,14 +104,33 @@ function openModal(html) {
 function closeModal() { $('#modal-overlay').classList.remove('active'); }
 $('#modal-overlay').addEventListener('click', function (e) { if (e.target === this) closeModal(); });
 
-function stageOf(id) { return DB.stages.filter(function (s) { return s.id === id; })[0]; }
+function findTask(id) {
+  var found = null;
+  DB.stages.forEach(function (st) {
+    st.scenes.forEach(function (sc) {
+      sc.tasks.forEach(function (t) { if (t.id === id) found = t; });
+    });
+  });
+  return found;
+}
+function gapTasks() {
+  var out = [];
+  DB.stages.forEach(function (st) {
+    st.scenes.forEach(function (sc) {
+      sc.tasks.forEach(function (t) {
+        if (t.wish) out.push({ id: t.id, title: t.title, desc: t.desc, stage: st.short });
+      });
+    });
+  });
+  return out;
+}
 function skillCountOfStage(st) {
   var n = 0;
   st.scenes.forEach(function (sc) { sc.tasks.forEach(function (t) { n += (t.skillIds || []).length; }); });
   return n;
 }
 function isLoaded(skillId) {
-  return State.runs.some(function (r) { return r.skillId === skillId; });
+  return State.runs.some(function (r) { return r.skillId === skillId && !r.finished; });
 }
 
 /* ---------------- 公共渲染片段 ---------------- */
@@ -310,10 +359,24 @@ function bindStage(root) {
   $all('[data-wish]', root).forEach(function (w) {
     w.addEventListener('click', function () {
       var id = w.getAttribute('data-wish');
-      if (State.wished[id]) return;
-      State.wished[id] = 3 + Math.floor(Math.random() * 4);
-      w.textContent = '✅ 已挂许愿池（' + State.wished[id] + ' 人在等）';
-      toast('许愿池 +1 · 有学长走通这条路时会通知你');
+      if (State.wished[id]) { location.hash = '#/wishes'; return; }
+      if (!WowAPI.auth.isLoggedIn()) {
+        toast('登录后才能把缺口挂到许愿池');
+        location.hash = '#/login';
+        return;
+      }
+      var task = findTask(id);
+      if (!task) return;
+      w.textContent = '挂上…';
+      WowAPI.hangWish(task.title, (task.desc || '') + '\n来源阶段任务：' + id).then(function (res) {
+        State.wished[id] = res.waiting || 1;
+        persistWished();
+        w.textContent = '✅ 已挂许愿池（' + State.wished[id] + ' 人在等）';
+        toast(res.created ? '缺口已挂上。有人走通会来认领。' : '你也在等这张卡了', true);
+      }).catch(function (err) {
+        w.textContent = '🙋 还没有 Skill · 挂许愿池';
+        toast(err.message || '没挂上');
+      });
     });
   });
 }
@@ -463,9 +526,12 @@ function bindMarket(root) {
     WowAPI.listSkills(marketFilter).then(function (list) {
       $('#market-grid', root).innerHTML = list.length
         ? list.map(skillCardHtml).join('')
-        : '<div class="empty-box">没有匹配的 Skill —— 想要的能力还没人沉淀？去许愿池挂一个</div>';
+        : '<div class="empty-box">没有匹配的 Skill<br><br><button class="btn-main" data-nav-to="#/wishes">去许愿池挂一个 →</button></div>';
       $('#f-count', root).textContent = '共 ' + list.length + ' 个';
       bindSkillLinks(root);
+      $all('[data-nav-to]', root).forEach(function (b) {
+        b.addEventListener('click', function () { location.hash = b.getAttribute('data-nav-to'); });
+      });
     });
   }
   $('#f-stage', root).addEventListener('change', function () { marketFilter.stage = this.value; refresh(); });
@@ -473,6 +539,138 @@ function bindMarket(root) {
   $('#f-free', root).addEventListener('change', function () { marketFilter.freeOnly = this.checked; refresh(); });
   $('#f-q', root).addEventListener('input', function () { marketFilter.q = this.value.trim(); refresh(); });
   refresh();
+}
+
+/* ============================================================
+ * 视图：许愿池（复用论坛 looking_for）
+ * ============================================================ */
+function fmtShort(t) {
+  if (!t) return '';
+  var d = new Date(t);
+  if (isNaN(d.getTime())) return '';
+  return (d.getMonth() + 1) + '/' + d.getDate();
+}
+function wishCardHtml(t) {
+  return '<a class="wish-card" href="#/wish/' + t.id + '">' +
+    '<h3>' + esc(t.title) + '</h3>' +
+    '<div class="wc-meta">' + esc(t.username || '匿名') + ' · ' +
+    (t.like_count || 0) + ' 人在等 · ' + (t.reply_count || 0) + ' 条回应' +
+    (t.created_at ? ' · ' + fmtShort(t.created_at) : '') + '</div></a>';
+}
+function viewWishes() {
+  var gaps = gapTasks().map(function (g) {
+    var on = State.wished[g.id];
+    return '<button class="wish-gap' + (on ? ' on' : '') + '" data-gap="' + g.id + '">' +
+      '<span class="wg-st">' + esc(g.stage) + '</span>' +
+      '<span class="wg-t">' + esc(g.title) + '</span>' +
+      '<span class="wg-a">' + (on ? '已在等' : '挂上') + '</span></button>';
+  }).join('');
+  return '<div class="view">' +
+    '<div class="page-head"><h1>许愿池</h1>' +
+    '<p>市场里没有的卡，挂在这里。点「我也在等」是排队，走过的人可以回一句——我们不编一张假 Skill。</p></div>' +
+    '<div class="card wish-form">' +
+    '<div class="sec-t">挂一个缺口</div>' +
+    '<input id="wish-title" placeholder="还没有哪张卡？一句话说清（至少 3 个字）">' +
+    '<textarea id="wish-body" rows="3" placeholder="可选：你卡在哪、试过什么。不需要写成方法。"></textarea>' +
+    '<button class="btn-main" id="wish-hang">挂上许愿池</button></div>' +
+    '<div class="section-title">阶段里还缺的卡</div>' +
+    '<div class="wish-gaps">' + gaps + '</div>' +
+    '<div class="section-title">正在等的人</div>' +
+    '<div id="wish-list"><div class="n-note">加载中…</div></div></div>';
+}
+function bindWishes(root) {
+  function needLogin(err) {
+    if (err && err.needLogin) {
+      toast('登录后才能挂愿望');
+      location.hash = '#/login';
+      return true;
+    }
+    return false;
+  }
+  function refresh() {
+    WowAPI.listWishes().then(function (list) {
+      $('#wish-list', root).innerHTML = list.length
+        ? list.map(wishCardHtml).join('')
+        : '<div class="empty-box">还没有人挂缺口。市场搜不到的东西，值得先挂在这里。</div>';
+    });
+  }
+  function hang(title, content, taskId) {
+    if (!title || title.length < 3) { toast('标题太短了，多说几个字'); return; }
+    WowAPI.hangWish(title, content || '').then(function (res) {
+      if (taskId) { State.wished[taskId] = res.waiting || 1; persistWished(); }
+      toast(res.created ? '缺口已挂上' : '你也在等这张卡了', true);
+      if (res.id) location.hash = '#/wish/' + res.id;
+      else refresh();
+    }).catch(function (err) {
+      if (needLogin(err)) return;
+      toast(err.message || '没挂上');
+    });
+  }
+  $('#wish-hang', root).addEventListener('click', function () {
+    hang($('#wish-title', root).value.trim(), $('#wish-body', root).value.trim());
+  });
+  $all('[data-gap]', root).forEach(function (b) {
+    b.addEventListener('click', function () {
+      var id = b.getAttribute('data-gap');
+      var task = findTask(id);
+      if (!task) return;
+      if (State.wished[id]) { hang(task.title, task.desc, id); return; }
+      hang(task.title, (task.desc || '') + '\n来源阶段任务：' + id, id);
+    });
+  });
+  refresh();
+}
+function viewWish(id) {
+  return '<div class="view" id="wish-detail"><div class="n-note">加载中…</div></div>';
+}
+function bindWish(root, id) {
+  function paint(pack) {
+    var t = pack.wish || {};
+    var replies = pack.replies || [];
+    var replyHtml = replies.length
+      ? replies.map(function (r) {
+          return '<div class="wish-reply"><div class="wr-h">' + esc(r.username || '匿名') +
+            ' · ' + fmtShort(r.created_at) + '</div><div class="wr-b">' + nl2br(r.content) + '</div></div>';
+        }).join('')
+      : '<div class="n-note">还没有人走过。走过的人可以回一句，不需要写成方法。</div>';
+    root.innerHTML = '<div class="view"><div class="crumb"><a href="#/wishes">许愿池</a> / ' + esc(t.title || '') + '</div>' +
+      '<div class="page-head"><h1>' + esc(t.title || '愿望') + '</h1>' +
+      '<p>' + esc(t.username || '匿名') + ' 挂出 · ' + (t.like_count || 0) + ' 人在等 · ' +
+      (t.reply_count || 0) + ' 条回应</p></div>' +
+      (t.content ? '<div class="card"><div class="wish-body">' + nl2br(t.content) + '</div></div>' : '') +
+      '<div class="actions">' +
+      '<button class="btn-main" id="wish-wait">' + (t.liked ? '✓ 你已在等（' + (t.like_count || 0) + '）' : '🙋 我也在等') + '</button>' +
+      '<a class="btn-ghost" href="#/publish">我走过，去沉淀 →</a></div>' +
+      '<div class="section-title">走过的人</div>' + replyHtml +
+      '<div class="card wish-form"><div class="sec-t">回一句</div>' +
+      '<textarea id="wish-reply" rows="3" placeholder="你走过的话，说一句就够。不承诺、不建议。"></textarea>' +
+      '<button class="btn-main" id="wish-send">送出回应</button></div></div>';
+    $('#wish-wait', root).addEventListener('click', function () {
+      if (t.liked) { toast('你已经在等了'); return; }
+      WowAPI.waitWish(id).then(function () {
+        toast('你也在等这张卡了', true);
+        WowAPI.getWish(id).then(paint);
+      }).catch(function (err) {
+        if (err && err.needLogin) { toast('登录后才能排队'); location.hash = '#/login'; return; }
+        toast(err.message || '没加上');
+      });
+    });
+    $('#wish-send', root).addEventListener('click', function () {
+      var txt = $('#wish-reply', root).value.trim();
+      if (!txt) { toast('写一句再送'); return; }
+      WowAPI.replyWish(id, txt).then(function () {
+        toast('回应已送出', true);
+        WowAPI.getWish(id).then(paint);
+      }).catch(function (err) {
+        if (err && err.needLogin) { toast('登录后才能回应'); location.hash = '#/login'; return; }
+        toast(err.message || '没送出');
+      });
+    });
+  }
+  WowAPI.getWish(id).then(paint).catch(function (err) {
+    root.innerHTML = '<div class="empty-box">这条愿望找不到了<br><br><a class="btn-main" href="#/wishes">回许愿池</a></div>';
+    if (err) toast(err.message || '加载失败');
+  });
 }
 
 /* ============================================================
@@ -595,7 +793,13 @@ function bindSkill(root, id) {
   var storyT = $('#story-t', root);
   if (storyT) storyT.addEventListener('click', function () { $('#story-b', root).classList.toggle('open'); });
   $('#load-btn', root).addEventListener('click', function () {
-    if (isLoaded(s.id)) { location.hash = '#/run'; return; }
+    if (isLoaded(s.id)) {
+      var exist = State.runs.filter(function (r) { return r.skillId === s.id && !r.finished; })[0];
+      if (exist) activeRunId = exist.id;
+      persistRuns();
+      location.hash = '#/run';
+      return;
+    }
     var owned = s.price === 0 || State.purchased[s.id];
     if (!owned) {
       if (State.coins < s.price) { toast('积分不足（当前 ' + State.coins + '）——完成微尝试提交 verdict 可以赚积分'); return; }
@@ -605,39 +809,53 @@ function bindSkill(root, id) {
       syncTopbar();
       toast('🪙 已兑换 · ' + s.price + ' 积分 → 创建者 ' + s.creator.name + ' 获得回报');
     }
-    State.runs.unshift({
+    var script = s.script && s.script.length
+      ? s.script.map(function (row) { return { label: row[0] + ' ' + row[1], done: false, sub: '' }; })
+      : [{ label: '按这张卡的步骤开始做', done: false, sub: '' }];
+    var dur = s.duration || '';
+    var newRun = {
       id: 'r' + Date.now(), skillId: s.id, day: 1,
-      total: s.duration.indexOf('天') > -1 ? parseInt(s.duration) || 14 : 0,
+      total: dur.indexOf('天') > -1 ? parseInt(dur, 10) || 14 : 0,
       startDate: '今天',
-      checks: s.script.map(function (row) { return { label: row[0] + ' ' + row[1], done: false, sub: '' }; }),
-      feed: [{ t: '⚡ 已装载', c: 'AI 现在带着 ' + s.creator.name + ' 的经验包陪你跑。判断点会在对的时间自动出现；触碰边界时它会喊停。' }],
+      checks: script,
+      feed: [{ t: '⚡ 已装载', c: 'AI 现在带着「' + s.title + '」（' + s.creator.name + '）的经验包陪你跑。判断点会在对的时间出现；触碰边界时它会喊停。' }],
       finished: false
-    });
+    };
+    State.runs.unshift(newRun);
+    activeRunId = newRun.id;
+    persistRuns();
     toast('🃏 已装载「' + s.title + '」', true);
-    setTimeout(function () { location.hash = '#/run'; }, 600);
+    setTimeout(function () { location.hash = '#/run'; }, 400);
   });
 }
 
 /* ============================================================
  * 视图：运行时（我的进行中）
  * ============================================================ */
-var activeRunId = 'r1';
+function liveRuns() {
+  return State.runs.filter(function (r) { return !r.finished && DB.skills[r.skillId]; });
+}
 function viewRun() {
-  if (!State.runs.length) {
-    return '<div class="view"><div class="page-head"><h1>⚡ 进行中</h1></div>' +
-      '<div class="empty-box">还没有装载任何 Skill<br><br><button class="btn-main" data-nav-to="#/market">去市场逛逛 →</button></div></div>';
+  var runs = liveRuns();
+  if (!runs.length) {
+    return '<div class="view"><div class="page-head"><h1>进行中</h1><p>装载一张卡之后，陪跑会出现在这里。</p></div>' +
+      '<div class="empty-box">还没有正在跑的 Skill<br><br>' +
+      '<button class="btn-main" data-nav-to="#/market">去市场选一张 →</button></div></div>';
   }
-  if (!State.runs.some(function (r) { return r.id === activeRunId; })) activeRunId = State.runs[0].id;
-  var run = State.runs.filter(function (r) { return r.id === activeRunId; })[0];
+  if (!runs.some(function (r) { return r.id === activeRunId; })) activeRunId = runs[0].id;
+  var run = runs.filter(function (r) { return r.id === activeRunId; })[0];
   var s = DB.skills[run.skillId];
+  if (!s) {
+    return '<div class="view"><div class="empty-box">这张卡已经不在了</div></div>';
+  }
 
-  var tabsHtml = State.runs.map(function (r) {
+  var tabsHtml = runs.map(function (r) {
     var rs = DB.skills[r.skillId];
     return '<button class="run-tab' + (r.id === activeRunId ? ' active' : '') + '" data-run="' + r.id + '">' +
       (r.persistent ? '🔁 ' : '🃏 ') + esc(rs ? rs.title.slice(0, 14) : r.skillId) + '…</button>';
   }).join('');
 
-  var checksHtml = run.checks.map(function (c, i) {
+  var checksHtml = (run.checks || []).map(function (c, i) {
     return '<div class="check' + (c.done ? ' done' : '') + (c.diff ? ' diff' : '') + '" data-check="' + i + '">' +
       '<div class="box">' + (c.diff ? '≠' : (c.done ? '✓' : '')) + '</div>' +
       '<div class="txt">' + (c.diff ? c.label.replace(/实际：/, '<b>实际：</b>') : esc(c.label)) +
@@ -670,7 +888,8 @@ function viewRun() {
     '<div class="card">' +
     '<div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:flex-start">' +
     '<h2 style="font-size:17px;font-weight:900">🃏 ' + esc(s.title) + '</h2>' + dayPill + '</div>' +
-    '<div class="n-note" style="margin:4px 0 10px">创建者：' + esc(s.creator.name) + ' · ' + esc(s.creator.meta) +
+    '<div class="n-note" style="margin:4px 0 10px">创建者：' + esc(s.creator && s.creator.name ? s.creator.name : '学长') +
+    (s.creator && s.creator.meta ? ' · ' + esc(s.creator.meta) : '') +
     ' · <span data-goskill="' + s.id + '" style="color:var(--violet);cursor:pointer;font-weight:800">查看原卡 →</span></div>' +
     '<div>' + checksHtml + '</div>' +
     '<div class="agent-feed" id="agent-feed">' + feedHtml + '</div>' +
@@ -694,7 +913,11 @@ function bindRun(root) {
     b.addEventListener('click', function () { location.hash = b.getAttribute('data-nav-to'); });
   });
   $all('[data-run]', root).forEach(function (b) {
-    b.addEventListener('click', function () { activeRunId = b.getAttribute('data-run'); render(); });
+    b.addEventListener('click', function () {
+      activeRunId = b.getAttribute('data-run');
+      persistRuns();
+      render();
+    });
   });
   var run = State.runs.filter(function (r) { return r.id === activeRunId; })[0];
   if (!run) return;
@@ -707,6 +930,7 @@ function bindRun(root) {
       var c = run.checks[i];
       if (c.diff) return;
       c.done = !c.done;
+      persistRuns();
       render();
     });
   });
@@ -719,6 +943,7 @@ function bindRun(root) {
     render();
     WowAPI.runChat(v, { skillId: run.skillId, day: run.day, runId: run.id, execId: run.execId }).then(function (res) {
       if (res.execId) run.execId = res.execId;
+      persistRuns();
       run.feed.push({
         t: res.boundaryHit ? '🚫 边界触发（boundary 持续监控）' : '🤖 陪跑 Agent（已注入 ' + s.creator.name + ' 的经验包）',
         c: res.reply, warn: res.boundaryHit
@@ -810,13 +1035,17 @@ function afterVerdict(run) {
 function finishRun(run, published) {
   run.finished = true;
   var s = DB.skills[run.skillId];
-  if (s.verify) { s.verify.pass++; s.verify.total++; }
-  DB.user.timeline.push({
-    date: '刚刚 · Day ' + (run.total || run.day), isNew: true,
-    txt: '完成「' + s.title + '」打卡 · verdict：成立' + (published ? ' · <b>从消费者变成了供给者</b>' : ''),
-    quote: ''
-  });
-  DB.user.narrative += ' 第 14 天，他把这个位置留给了下一个不敢进门的人。';
+  if (s && s.verify) { s.verify.pass++; s.verify.total++; }
+  if (s) {
+    DB.user.timeline.push({
+      date: '刚刚 · Day ' + (run.total || run.day), isNew: true,
+      txt: '完成「' + s.title + '」打卡 · verdict：成立' + (published ? ' · <b>从消费者变成了供给者</b>' : ''),
+      quote: ''
+    });
+  }
+  var next = liveRuns()[0];
+  activeRunId = next ? next.id : '';
+  persistRuns();
   render();
 }
 
@@ -1139,6 +1368,8 @@ function render() {
     case 'orch': html = viewOrch(r.param); bind = function (root) { bindOrch(root, r.param); }; navKey = 'paths'; break;
     case 'stage': html = viewStage(r.param); bind = bindStage; break;
     case 'market': html = viewMarket(); bind = bindMarket; break;
+    case 'wishes': html = viewWishes(); bind = bindWishes; break;
+    case 'wish': html = viewWish(r.param); bind = function (root) { bindWish(root, r.param); }; navKey = 'wishes'; break;
     case 'skill': html = viewSkill(r.param); bind = function (root) { bindSkill(root, r.param); }; navKey = 'market'; break;
     case 'run': html = viewRun(); bind = bindRun; break;
     case 'junction': html = viewJunction(r.param); bind = function (root) { bindSkillLinks(root); bindReroute(root); }; navKey = 'paths'; break;

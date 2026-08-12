@@ -56,7 +56,7 @@
           @click="handleResource(r)"
         >{{ r.label }}</el-button>
         <el-button size="small" type="primary" plain @click="goForum">
-          去论坛聊聊
+          去许愿池挂一个
         </el-button>
       </div>
 
@@ -88,7 +88,7 @@
       </div>
       <div class="reject-actions" style="margin-top: 14px">
         <el-button size="small" type="primary" plain @click="goForum">
-          去论坛聊聊
+          去许愿池挂一个
         </el-button>
       </div>
     </section>

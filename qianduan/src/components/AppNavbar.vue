@@ -147,7 +147,7 @@ async function logout() {
       <div class="nav-actions">
         <!-- 主入口是「我要成长」而不是「发布技能」：前台卖下一步，后台跑 Skill -->
         <el-button text class="grow-entry" @click="goGrow">我要成长</el-button>
-        <el-button text class="grow-entry" @click="router.push('/forum')">论坛</el-button>
+        <el-button text class="grow-entry" @click="router.push('/forum')">许愿池</el-button>
         <el-button v-if="authState.user" text @click="goWorkbench">我的任务</el-button>
         <template v-if="authState.user">
           <!-- 消息通知铃铛：角标显示未读数 -->

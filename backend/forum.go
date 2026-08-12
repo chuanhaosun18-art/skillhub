@@ -1,6 +1,6 @@
-// 论坛（Forum）：不能成为 Skill 的经验、询问、寻找没有 Skill 的地方。
-// 定位：前台搜索路由不到 Skill 时的出口。求经验（help）/ 找技能（looking_for）/
-// 经验交流（experience）三类帖子，游客可读，登录可发帖与回复。
+// 论坛 / 许愿池：市场搜不到 Skill 时的出口。
+// WowSkillLand 把 looking_for 当许愿池：发帖=挂愿望，点赞=我也在等，回复=走过的人回一句。
+// 分类：求经验（help）/ 还没有这张卡（looking_for）/ 我走过可以沉淀（experience）
 package main
 
 import (
@@ -14,9 +14,9 @@ import (
 
 // 论坛分类（前后端保持一致）
 var ForumCategories = map[string]string{
-	"help":        "求经验",
-	"looking_for": "找技能",
-	"experience":  "经验交流",
+	"help":        "求学长带一下",
+	"looking_for": "还没有这张卡",
+	"experience":  "我走过可以沉淀",
 }
 
 type ForumTopic struct {

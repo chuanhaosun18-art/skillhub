@@ -92,7 +92,7 @@ async function submitReply() {
     <AppNavbar>
       <div class="back-bar">
         <el-button text @click="router.push('/forum')">
-          <el-icon><ArrowLeft /></el-icon>返回论坛
+          <el-icon><ArrowLeft /></el-icon>返回许愿池
         </el-button>
       </div>
     </AppNavbar>
@@ -126,14 +126,14 @@ async function submitReply() {
             >
               <el-icon><Pointer /></el-icon>
               <span>{{ topic.like_count ? topic.like_count : '' }}</span>
-              <span class="like-text">点赞</span>
+              <span class="like-text">我也在等</span>
             </button>
           </div>
         </div>
 
         <!-- 回复列表 -->
         <div class="reply-section">
-          <div class="reply-title">{{ replies.length ? `${replies.length} 条回复` : '还没有回复，你是第一个' }}</div>
+          <div class="reply-title">{{ replies.length ? `${replies.length} 条回应` : '还没有人走过。走过的人可以回一句。' }}</div>
           <div v-if="replies.length" class="reply-list">
             <div class="reply-item" v-for="r in replies" :key="r.id">
               <el-avatar :size="30" :src="r.avatar || undefined">{{ (r.username || '匿')[0] }}</el-avatar>
@@ -162,10 +162,10 @@ async function submitReply() {
               :rows="3"
               maxlength="2000"
               show-word-limit
-              :placeholder="authState.token ? '写下你的经验、提醒或线索……' : '登录后即可回复'"
+              :placeholder="authState.token ? '你走过的话，说一句就够。不承诺、不建议。' : '登录后即可回应'"
             />
             <div class="reply-actions">
-              <el-button type="primary" :loading="replying" @click="submitReply">回复</el-button>
+              <el-button type="primary" :loading="replying" @click="submitReply">送出回应</el-button>
             </div>
           </div>
         </div>

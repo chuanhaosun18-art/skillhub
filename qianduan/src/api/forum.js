@@ -1,5 +1,4 @@
-// 论坛 API 层：不能成为 Skill 的经验、询问、寻找没有 Skill 的地方。
-// 游客可浏览帖子与回复；登录后可发帖、回复。
+// 论坛 / 许愿池 API：looking_for = 挂愿望，like = 我也在等，reply = 走过的人。
 import { getToken } from './auth'
 
 const BASE = ''
@@ -29,9 +28,9 @@ async function req(path, { method = 'GET', body } = {}) {
 
 /** 论坛分类（与后端保持一致） */
 export const FORUM_CATEGORIES = [
-  { value: 'help', label: '求经验' },
-  { value: 'looking_for', label: '找技能' },
-  { value: 'experience', label: '经验交流' },
+  { value: 'looking_for', label: '还没有这张卡' },
+  { value: 'help', label: '求学长带一下' },
+  { value: 'experience', label: '我走过可以沉淀' },
 ]
 
 export function categoryLabel(value) {

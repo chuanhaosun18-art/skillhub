@@ -182,6 +182,35 @@ a{color:inherit;text-decoration:none}
   border:1.5px dashed var(--coral);border-radius:11px;padding:5px 12px;font-size:12px;font-weight:700;
   background:var(--coral-soft);color:#c2453a;cursor:pointer;
 }
+.wish-form{display:flex;flex-direction:column;gap:10px;margin-bottom:18px}
+.wish-form input,.wish-form textarea{
+  border:2px solid var(--ink);border-radius:12px;padding:10px 12px;font-size:14px;
+  font-family:inherit;background:var(--cream);outline:none;font-weight:700;color:var(--ink-2);
+}
+.wish-form textarea{resize:vertical;min-height:72px;font-weight:600}
+.wish-gaps{display:flex;flex-direction:column;gap:8px;margin-bottom:18px}
+.wish-gap{
+  display:flex;align-items:center;gap:10px;flex-wrap:wrap;text-align:left;
+  border:2px dashed var(--ink);border-radius:14px;padding:10px 14px;background:var(--paper);
+  cursor:pointer;font-family:inherit;
+}
+.wish-gap.on{border-style:solid;background:var(--coral-soft)}
+.wish-gap .wg-st{font-size:11px;font-weight:900;color:var(--violet)}
+.wish-gap .wg-t{flex:1;font-size:13.5px;font-weight:800}
+.wish-gap .wg-a{font-size:12px;font-weight:900;color:#c2453a}
+.wish-card{
+  display:block;background:var(--paper);border:2px solid var(--ink);border-radius:var(--r);
+  box-shadow:var(--shadow-sm);padding:14px 16px;margin-bottom:10px;color:inherit;text-decoration:none;
+}
+.wish-card:hover{transform:translate(-1px,-1px)}
+.wish-card h3{font-size:15px;font-weight:900;margin:0 0 6px}
+.wish-card .wc-meta{font-size:12px;font-weight:700;color:var(--ink-3)}
+.wish-body{font-size:14px;font-weight:600;line-height:1.6;white-space:pre-wrap}
+.wish-reply{
+  border:2px solid var(--ink);border-radius:12px;padding:10px 14px;background:var(--cream);margin-bottom:8px;
+}
+.wish-reply .wr-h{font-size:12px;font-weight:900;color:var(--ink-3);margin-bottom:4px}
+.wish-reply .wr-b{font-size:13.5px;font-weight:600;line-height:1.55}
 .junction-banner{
   background:var(--ink);color:var(--cream);border-radius:var(--r);padding:14px 20px;margin-bottom:16px;
   display:flex;align-items:center;gap:14px;flex-wrap:wrap;box-shadow:var(--shadow);
@@ -524,7 +553,7 @@ a{color:inherit;text-decoration:none}
   .hero{padding:18px 16px;border-radius:16px;box-shadow:3px 3px 0 rgba(34,32,28,.9)}
   .hero h1{font-size:22px}
   .hero-input{flex-direction:column}
-  .hero-input input,.chat-row input,.auth-form input,.auth-form select,.filterbar input[type=text],.filterbar select{
+  .hero-input input,.chat-row input,.auth-form input,.auth-form select,.filterbar input[type=text],.filterbar select,.wish-form input,.wish-form textarea{
     font-size:16px; /* 避免 iOS 聚焦缩放 */
   }
   .hero-input .btn-main{width:100%}

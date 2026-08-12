@@ -541,5 +541,66 @@ var WowAPI = {
         ]
       }] : []
     });
+  },
+
+  /* ----------------------------------------------------------
+   * 8. 许愿池（复用论坛：无 Skill 时的供给缺口）
+   *    GET  /forum/topics?category=looking_for
+   *    POST /forum/topics          挂愿望
+   *    POST /forum/topics/:id/like 我也在等
+   *    GET  /forum/topics/:id      详情 + 学长回应
+   *    POST /forum/topics/:id/replies
+   * ---------------------------------------------------------- */
+  listWishes: function (keyword) {
+    var q = ['category=looking_for'];
+    if (keyword) q.push('keyword=' + encodeURIComponent(keyword));
+    return wowGet('/forum/topics?' + q.join('&')).then(function (r) {
+      return r.data || [];
+    }).catch(function () { return []; });
+  },
+  hangWish: function (title, content) {
+    return ensureLogin().then(function () {
+      return wowGet('/forum/topics?category=looking_for&keyword=' + encodeURIComponent(title));
+    }).then(function (r) {
+      var list = r.data || [];
+      var hit = list.filter(function (t) { return t.title === title; })[0];
+      if (hit) {
+        if (hit.liked) {
+          return { id: hit.id, waiting: hit.like_count || 1, joined: true };
+        }
+        return wowPost('/forum/topics/' + hit.id + '/like').then(function (d) {
+          var body = d.data || d;
+          return { id: hit.id, waiting: body.like_count || (hit.like_count || 0) + 1, joined: true };
+        });
+      }
+      return wowPost('/forum/topics', {
+        title: title,
+        content: content || '',
+        category: 'looking_for'
+      }).then(function (res) {
+        var id = (res.data && res.data.id) || res.id;
+        return wowPost('/forum/topics/' + id + '/like').then(function (d) {
+          var body = d.data || d;
+          return { id: id, waiting: body.like_count || 1, created: true };
+        }).catch(function () {
+          return { id: id, waiting: 1, created: true };
+        });
+      });
+    });
+  },
+  getWish: function (id) {
+    return wowGet('/forum/topics/' + id).then(function (r) {
+      return { wish: r.data || r, replies: r.replies || [] };
+    });
+  },
+  replyWish: function (id, content) {
+    return ensureLogin().then(function () {
+      return wowPost('/forum/topics/' + id + '/replies', { content: content });
+    });
+  },
+  waitWish: function (id) {
+    return ensureLogin().then(function () {
+      return wowPost('/forum/topics/' + id + '/like').then(function (d) { return d.data || d; });
+    });
   }
 };

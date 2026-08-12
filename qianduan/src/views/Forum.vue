@@ -17,7 +17,7 @@ const activeCategory = ref('全部')
 // 发帖对话框
 const dialogVisible = ref(false)
 const posting = ref(false)
-const form = ref({ title: '', category: 'help', content: '' })
+const form = ref({ title: '', category: 'looking_for', content: '' })
 
 function fmtTime(t) {
   if (!t) return ''
@@ -59,12 +59,12 @@ function goDetail(id) {
 
 function openCreate() {
   if (!authState.token) {
-    ElMessage.warning('登录后才能发帖')
+    ElMessage.warning('登录后才能挂愿望')
     router.push({ path: '/login', query: { redirect: route.fullPath } })
     return
   }
   form.value.title = keyword.value.trim()
-  form.value.category = 'help'
+  form.value.category = 'looking_for'
   form.value.content = ''
   dialogVisible.value = true
 }
@@ -78,7 +78,7 @@ async function submitTopic() {
   posting.value = true
   try {
     const { id } = await createTopic(form.value)
-    ElMessage.success('发布成功')
+    ElMessage.success('已挂上许愿池')
     dialogVisible.value = false
     router.push(`/forum/${id}`)
   } catch (e) {
@@ -111,7 +111,7 @@ watch(
       <div class="search-bar">
         <el-input
           v-model="keyword"
-          placeholder="在论坛里找一找，或直接发帖问"
+          placeholder="搜还没有的卡，或直接挂一个愿望"
           clearable
           @keyup.enter="handleSearch"
         >
@@ -126,10 +126,9 @@ watch(
     <main class="content">
       <!-- 论坛定位说明 -->
       <div class="intro">
-        <h1 class="intro-title">论坛 · 没做成 Skill 的东西，在这里聊</h1>
+        <h1 class="intro-title">许愿池 · 还没有做成 Skill 的缺口，挂在这里</h1>
         <p class="intro-sub">
-          有些经验不值得做成 Skill，但值得被听见：一句话的提醒、一次踩坑、一个还没人做成能力的需求。
-          这里不卖方法，只连接人。
+          市场搜不到就不要编一张假卡。挂一个愿望，「我也在等」是排队，走过的人回一句就够。
         </p>
       </div>
 
@@ -137,15 +136,15 @@ watch(
       <div class="toolbar">
         <div class="cats">
           <span
-            v-for="cat in ['全部', ...FORUM_CATEGORIES.map((c) => c.label)]"
-            :key="cat"
+            v-for="cat in [{ value: '全部', label: '全部' }, ...FORUM_CATEGORIES]"
+            :key="cat.value"
             class="cat"
-            :class="{ active: activeCategory === cat }"
-            @click="selectCategory(cat)"
-          >{{ cat }}</span>
+            :class="{ active: activeCategory === cat.value }"
+            @click="selectCategory(cat.value)"
+          >{{ cat.label }}</span>
         </div>
         <el-button type="primary" round @click="openCreate">
-          <el-icon style="margin-right: 4px"><EditPen /></el-icon>发帖
+          <el-icon style="margin-right: 4px"><EditPen /></el-icon>挂愿望
         </el-button>
       </div>
 
@@ -176,14 +175,14 @@ watch(
           </div>
         </div>
 
-        <el-empty v-else description="还没有相关帖子。它可能是个新问题——发一帖，看看有没有人遇到过">
-          <el-button type="primary" @click="openCreate">我来发一帖</el-button>
+        <el-empty v-else description="还没有人挂缺口。市场搜不到的东西，值得先挂在这里。">
+          <el-button type="primary" @click="openCreate">我来挂一个</el-button>
         </el-empty>
       </template>
     </main>
 
     <!-- 发帖对话框 -->
-    <el-dialog v-model="dialogVisible" title="发一帖" width="560px" :close-on-click-modal="false">
+    <el-dialog v-model="dialogVisible" title="挂一个愿望" width="560px" :close-on-click-modal="false">
       <el-form label-position="top">
         <el-form-item label="分类">
           <el-radio-group v-model="form.category">
@@ -195,7 +194,7 @@ watch(
           </el-radio-group>
         </el-form-item>
         <el-form-item label="标题">
-          <el-input v-model="form.title" maxlength="80" show-word-limit placeholder="一句话说清你想聊什么，例如：实习摸鱼时怎么保持手感" />
+          <el-input v-model="form.title" maxlength="80" show-word-limit placeholder="还没有哪张卡？一句话说清" />
         </el-form-item>
         <el-form-item label="内容">
           <el-input
@@ -204,13 +203,13 @@ watch(
             :rows="6"
             maxlength="5000"
             show-word-limit
-            placeholder="想说的细节、背景、尝试过什么。不需要写成方法——聊得开就好"
+            placeholder="你卡在哪、试过什么。不需要写成方法。"
           />
         </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="posting" @click="submitTopic">发布</el-button>
+        <el-button type="primary" :loading="posting" @click="submitTopic">挂上</el-button>
       </template>
     </el-dialog>
 

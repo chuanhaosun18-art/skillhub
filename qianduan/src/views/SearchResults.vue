@@ -124,7 +124,7 @@ function onProofError(e) {
           @click="goForum"
         >
           <el-icon><ChatLineRound /></el-icon>
-          结果不符合预期？去论坛找找
+          结果不符合预期？去许愿池挂一个
         </el-button>
       </div>
 
@@ -191,10 +191,10 @@ function onProofError(e) {
           </div>
         </div>
 
-        <!-- 空状态：搜不到 → 去论坛。Skill 库没有的东西，值得发帖问一问 -->
-        <el-empty v-else-if="searched" description="没有找到匹配的技能。它可能还没有人做成 Skill——去论坛问问看">
+        <!-- 空状态：搜不到 → 许愿池 -->
+        <el-empty v-else-if="searched" description="没有找到匹配的技能。它可能还没有人做成 Skill——去许愿池挂一个">
           <div class="empty-actions">
-            <el-button type="primary" @click="goForum">去论坛提问</el-button>
+            <el-button type="primary" @click="goForum">去许愿池</el-button>
             <el-button @click="goBack">返回首页</el-button>
           </div>
         </el-empty>

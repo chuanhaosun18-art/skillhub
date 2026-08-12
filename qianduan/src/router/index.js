@@ -18,7 +18,7 @@ const routes = [
     path: '/forum',
     name: 'forum',
     component: () => import('../views/Forum.vue'),
-    meta: { title: '论坛 · 没做成 Skill 的东西' },
+    meta: { title: '许愿池 · 还没有做成 Skill 的缺口' },
   },
   {
     path: '/forum/:id',

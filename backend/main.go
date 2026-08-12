@@ -59,8 +59,7 @@ func main() {
 	api.GET("/skills/:id/issues", listIssues)
 	api.PATCH("/issues/:id", authMiddleware(), closeIssue)
 
-	// 论坛（Forum）：不能成为 Skill 的经验、询问、寻找没有 Skill 的地方。
-	// 前台搜索路由不到 Skill 时的出口。游客可读，登录可发帖与回复。
+	// 许愿池（复用论坛）：无 Skill 时挂缺口。looking_for=愿望，like=我也在等，reply=走过的人。
 	api.GET("/forum/topics", listForumTopics)
 	api.POST("/forum/topics", authMiddleware(), createForumTopic)
 	api.GET("/forum/topics/:id", getForumTopic)
