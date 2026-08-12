@@ -22,6 +22,20 @@ function goProfile() {
   router.push('/profile')
 }
 
+// 「我要成长」：用户用一句人话说清卡在哪，系统给下一步并路由能力
+function goGrow() {
+  if (!authState.token) {
+    ElMessage.warning('登录后才能记录你的成长轨迹')
+    router.push('/login')
+    return
+  }
+  router.push('/grow')
+}
+
+function goWorkbench() {
+  router.push('/workbench')
+}
+
 async function logout() {
   try {
     await ElMessageBox.confirm('确定退出登录吗？', '提示', { type: 'warning' })
@@ -48,9 +62,12 @@ async function logout() {
       </div>
 
       <div class="nav-actions">
+        <!-- 主入口是「我要成长」而不是「发布技能」：前台卖下一步，后台跑 Skill -->
+        <el-button text class="grow-entry" @click="goGrow">我要成长</el-button>
+        <el-button v-if="authState.user" text @click="goWorkbench">我的任务</el-button>
         <template v-if="authState.user">
-          <el-button type="primary" round @click="goPublish">
-            <el-icon style="margin-right: 4px"><Plus /></el-icon>发布技能
+          <el-button round @click="goPublish">
+            <el-icon style="margin-right: 4px"><Plus /></el-icon>上传已有 Skill
           </el-button>
           <el-dropdown trigger="click" @command="(cmd) => (cmd === 'profile' ? goProfile() : logout())">
             <span class="user-entry">
@@ -74,7 +91,7 @@ async function logout() {
         </template>
         <template v-else>
           <el-button text @click="goLogin">登录 / 注册</el-button>
-          <el-button type="primary" round @click="goPublish">发布技能</el-button>
+          <el-button type="primary" round @click="goGrow">我要成长</el-button>
         </template>
       </div>
     </div>

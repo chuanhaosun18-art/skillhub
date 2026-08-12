@@ -294,7 +294,10 @@ function goBack() {
               {{ skill.name }}
               <el-tag v-if="skill.version" size="small" effect="plain">v{{ skill.version }}</el-tag>
             </h1>
-            <el-rate :model-value="skill.rating" disabled text-color="#ff9900" />
+            <!-- 星级已移除：要判断能不能把活交给它，看的是证据不是分数 -->
+            <router-link :to="'/trust/' + skill.id" class="trust-entry">
+              看它的证据（Trust Card）
+            </router-link>
           </div>
           <p class="desc">{{ skill.description }}</p>
           <div class="meta-row">
@@ -314,13 +317,13 @@ function goBack() {
               <div class="stat-num">{{ totalSizeText }}</div>
               <div class="stat-label">包大小</div>
             </div>
-            <div class="stat-item">
+            <div class="stat-item secondary">
               <div class="stat-num">{{ skill.download_count }}</div>
-              <div class="stat-label">下载量</div>
+              <div class="stat-label">下载量（注意力参考）</div>
             </div>
-            <div class="stat-item">
+            <div class="stat-item secondary">
               <div class="stat-num">{{ skill.view_count }}</div>
-              <div class="stat-label">浏览数</div>
+              <div class="stat-label">浏览数（注意力参考）</div>
             </div>
           </div>
 
@@ -431,7 +434,14 @@ function goBack() {
 
         <!-- 评分与评价 -->
         <section class="card">
-          <h2 class="section-title">评分与评价</h2>
+          <h2 class="section-title">使用者评价</h2>
+          <el-alert
+            type="info"
+            :closable="false"
+            title="评价不参与排序，也不作为信任依据"
+            description="一个总分没法告诉你它在什么情况下有效、在哪里会失败。要判断能不能把活交给它，请看 Trust Card 里的证据、边界和判断级溯源。"
+            style="margin-bottom: 14px"
+          />
 
           <div class="rating-summary" v-loading="reviewLoading">
             <el-rate :model-value="skill.rating" disabled text-color="#ff9900" />
@@ -786,6 +796,28 @@ function goBack() {
 
 .ai-content em {
   color: #909399;
+}
+
+/* Trust Card 入口取代原来的星级 */
+.trust-entry {
+  font-size: 13px;
+  color: #409eff;
+  text-decoration: none;
+  white-space: nowrap;
+  border: 1px solid #409eff;
+  border-radius: 14px;
+  padding: 4px 12px;
+}
+.trust-entry:hover {
+  background: #ecf5ff;
+}
+/* 热度类指标降级：视觉上弱化，避免被当成信任依据 */
+.stat-item.secondary .stat-num {
+  color: #909399;
+  font-weight: 400;
+}
+.stat-item.secondary .stat-label {
+  color: #c0c4cc;
 }
 
 /* 评分与评价 */

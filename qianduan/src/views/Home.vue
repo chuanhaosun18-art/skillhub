@@ -36,10 +36,27 @@ function searchKeyword(kw) {
 
     <!-- 主内容 -->
     <main class="hero">
-      <h1 class="title">发现身边最值得学习的技能</h1>
+      <h1 class="title">你现在卡在哪？</h1>
       <p class="subtitle">
-        无需登录即可搜索他人技能，登录后可发布自己的技能并获取推荐
+        前台卖「下一步」，后台跑 Skill。用你自己的话说清现在的处境，
+        剩下的交给我——不用先想清楚自己需要什么能力。
       </p>
+
+      <!-- 主入口：我要成长。Skill 是底层基础设施，不该是前台术语 -->
+      <div class="grow-band">
+        <div class="grow-text">
+          <div class="grow-title">我要成长</div>
+          <div class="grow-sub">
+            说一句你现在的困境 → 拿到今天的下一步 → 在工作台把它做完 →
+            这次的方法自动变成别人也能用的 Skill
+          </div>
+        </div>
+        <el-button type="primary" size="large" round @click="$router.push('/grow')">
+          帮我找下一步
+        </el-button>
+      </div>
+
+      <div class="or-line"><span>或者，直接翻别人已经沉淀好的能力</span></div>
 
       <!-- 搜索框 -->
       <div class="search-box">
@@ -120,7 +137,59 @@ function searchKeyword(kw) {
 .subtitle {
   font-size: 16px;
   color: #909399;
-  margin-bottom: 40px;
+  margin-bottom: 28px;
+  line-height: 1.8;
+  max-width: 620px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* 主入口在视觉上必须压过搜索框：产品不是 Skill 目录 */
+.grow-band {
+  max-width: 720px;
+  margin: 0 auto 24px;
+  background: linear-gradient(135deg, #ecf5ff 0%, #f7fbff 100%);
+  border: 1px solid #c6e2ff;
+  border-radius: 14px;
+  padding: 22px 26px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  text-align: left;
+}
+.grow-title {
+  font-size: 20px;
+  font-weight: 700;
+  color: #303133;
+  margin-bottom: 6px;
+}
+.grow-sub {
+  font-size: 13px;
+  color: #606266;
+  line-height: 1.8;
+}
+.or-line {
+  position: relative;
+  max-width: 720px;
+  margin: 0 auto 20px;
+  text-align: center;
+}
+.or-line::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: #ebeef5;
+}
+.or-line span {
+  position: relative;
+  background: #f5f7fa;
+  padding: 0 14px;
+  font-size: 12px;
+  color: #c0c4cc;
 }
 
 .search-box {

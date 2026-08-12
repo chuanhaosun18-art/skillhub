@@ -36,15 +36,21 @@ func listSkills(c *gin.Context) {
 		args = append(args, category)
 	}
 
-	order := "s.created_at DESC"
+	// 排序口径按 PRD 改造：热度可以反映注意力，任务证据才能说明能力。
+	// 因此不再提供「按评分」「按下载量」排序；旧的 sort=rating / sort=downloads 一律映射到证据排序。
+	order := "COALESCE(s.quality_score,0) DESC, s.created_at DESC"
 	switch sortBy {
-	case "rating":
-		order = "s.rating DESC, s.created_at DESC"
-	case "downloads":
-		order = "s.download_count DESC, s.created_at DESC"
+	case "newest":
+		order = "s.created_at DESC"
 	case "oldest":
 		order = "s.created_at ASC"
+	case "rating", "downloads", "evidence", "quality":
+		order = "COALESCE(s.quality_score,0) DESC, s.created_at DESC"
 	}
+
+	// 只有通过门禁发布的才进市场；草稿、经验笔记、待门禁、已归档都不出现。
+	// 老库里没有 status 的记录按 published 处理，避免历史数据凭空消失。
+	where = append(where, "COALESCE(NULLIF(s.status,''),'published') = 'published'")
 
 	query := `SELECT s.id, s.owner_id, COALESCE(u.username,''), s.name, s.description,
 		s.category, s.tags, s.version, s.icon, s.file_count, s.total_size,
@@ -138,14 +144,29 @@ func createSkill(c *gin.Context) {
 	// 发布者：来自登录 token
 	ownerID := c.GetInt64("userID")
 
-	// 创建 skill 记录
-	result, err := db.Exec(`INSERT INTO skills (owner_id, name, description, category, tags, version) VALUES (?, ?, ?, ?, ?, ?)`,
-		ownerID, name, description, category, tags, version)
+	// 创建 skill 记录。
+	// 门禁改造：直接上传 / AI 引导生成属于「路线二」，落地状态为 gated 而不是 published——
+	// 它还没有任何真实执行作为根，必须先在工作台跑一次真实任务，并通过发布前四问才能进市场。
+	result, err := db.Exec(`INSERT INTO skills (owner_id, name, description, category, tags, version,
+		status, origin, maintainer_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		ownerID, name, description, category, tags, version,
+		SkillStatusGated, OriginRouteTwo, ownerID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	skillID, _ := result.LastInsertId()
+
+	// 同步建一个版本行，后续门禁、Trust Card、溯源都挂在版本上
+	if verRes, err := db.Exec(`INSERT INTO skill_versions (skill_id, version, description, goal,
+		done_criteria, workflow, boundary, contract, gotchas)
+		VALUES (?, ?, ?, ?, '[]', '[]', '{"not_applicable":[],"handoff_trigger":[],"fallback_path":""}',
+		'{"input":"","output":"","permissions":["read_upload"]}', '[]')`,
+		skillID, version, description, description); err == nil {
+		if verID, err := verRes.LastInsertId(); err == nil {
+			db.Exec(`UPDATE skills SET current_version_id = ? WHERE id = ?`, verID, skillID)
+		}
+	}
 
 	// 处理上传的 zip 包
 	archive, err := c.FormFile("archive")
@@ -161,7 +182,19 @@ func createSkill(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusCreated, gin.H{"data": skill})
+	c.JSON(http.StatusCreated, gin.H{
+		"data":   skill,
+		"status": SkillStatusGated,
+		"gate": gin.H{
+			"published": false,
+			"message":   "已保存，但还没有进市场。它现在是靠描述生成的，缺一个真实执行作为根。",
+			"next_steps": []string{
+				"用它在任务工作台做一次真实任务",
+				"补齐关键判断与适用边界",
+				"跑发布前四问（边界停机必须 100%）",
+			},
+		},
+	})
 }
 
 // saveAndExtractArchive 保存 zip 并解压、登记文件清单
