@@ -1,7 +1,7 @@
 // 成长闭环 API 层：目标识别 → 任务工作台 → Skill Creator → 门禁 → 路由 → Trust Card → 反馈升级
 import { getToken, clearAuth } from './auth'
 
-const BASE = 'http://localhost:8080'
+const BASE = import.meta.env.VITE_API_BASE || ''
 
 async function req(path, { method = 'GET', body } = {}) {
   const headers = {}
@@ -35,6 +35,32 @@ async function req(path, { method = 'GET', body } = {}) {
     throw err
   }
   return data
+}
+
+/* ---------- 单一入口 Agent ---------- */
+
+/**
+ * 现在该做什么。纯规则推导，不调模型——所以每次结果都一样。
+ * 任何一次操作完成后都应该重新调它，拿下一张卡。
+ */
+export function agentState() {
+  return req('/agent/state')
+}
+
+/** 用户新说了一句话。这是唯一会调模型的入口 */
+export function agentSay(utterance) {
+  return req('/agent/say', { method: 'POST', body: { utterance } })
+}
+
+/**
+ * 执行卡片上的 action。
+ * agent 只告诉前端该打哪个端点，业务逻辑仍在原端点里——
+ * 所以门禁、硬约束、口径都不会因为走了 agent 而被绕过。
+ */
+export async function runAction(action, body) {
+  const path = String(action.path || '').replace(/^\/api\/growth/, '')
+  if (!path) return null
+  return req(path, { method: action.method || 'POST', body })
 }
 
 /* ---------- F1 目标识别 ---------- */

@@ -124,7 +124,7 @@ func runEvals(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	decisions := loadDecisions(skillID)
+	decisions := loadDecisions(versionID.Int64)
 
 	results := []gin.H{}
 	for _, t := range types {

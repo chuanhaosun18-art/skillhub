@@ -21,6 +21,17 @@ type admissionResult struct {
 	Failures []string
 }
 
+// 判断挂在版本上，按 Skill 计数要经关联表绕到当前版本。
+// 抽成常量避免三处各写一遍写歪。
+const decisionCountBySkillSQL = `SELECT COUNT(*) FROM skill_version_decisions l
+	JOIN skills s ON s.current_version_id = l.skill_version_id
+	WHERE s.id = ?`
+
+const validDecisionCountBySkillSQL = `SELECT COUNT(*) FROM skill_version_decisions l
+	JOIN decisions d ON d.id = l.decision_id
+	JOIN skills s ON s.current_version_id = l.skill_version_id
+	WHERE s.id = ? AND d.invalidated_at IS NULL`
+
 // runAdmissionCheck 结构、依赖、权限、数据边界、适用范围的静态审查。
 // 降权信号：缺少必要文件、依赖失效、权限过大、边界模糊。
 func runAdmissionCheck(skillID int64, ver *SkillVersion) admissionResult {
@@ -58,6 +69,15 @@ func runAdmissionCheck(skillID int64, ver *SkillVersion) admissionResult {
 		json.Unmarshal([]byte(ver.DoneCriteria), &criteria)
 		if len(criteria) == 0 {
 			res.Failures = append(res.Failures, "缺少可判断的完成标准")
+		} else {
+			// SKU 要「可比较」。全是自定义标准的 Skill 无法与同类对齐，
+			// 不阻止发布，但要提示——这是它进不了比较视图的原因。
+			var intent string
+			db.QueryRow(`SELECT COALESCE(task_intent,'') FROM skills WHERE id = ?`, skillID).Scan(&intent)
+			if len(CriteriaVocab[intent]) > 0 && comparableCriteriaCount(intent, ver.DoneCriteria) == 0 {
+				res.Failures = append(res.Failures,
+					"完成标准全是自定义的，无法与同类 Skill 比较：至少从公共标准里选一条")
+			}
 		}
 
 		// 权限过大：声明了不可逆操作却没有对应的人工接管
@@ -141,19 +161,28 @@ func recomputeSkillScore(skillID int64) *SkillScore {
 
 	sampleSufficient := callCount >= OnlineEvidenceMinCall
 	if callCount > 0 {
-		var completed, abandoned, exported, reused int
+		var completed, abandoned, reused int
 		var avgCorrection sql.NullFloat64
 		db.QueryRow(`SELECT
 			SUM(CASE WHEN status = ? THEN 1 ELSE 0 END),
 			SUM(CASE WHEN status = ? THEN 1 ELSE 0 END),
-			SUM(CASE WHEN completion_signal LIKE '%"exported":true%' THEN 1 ELSE 0 END),
 			SUM(CASE WHEN completion_signal LIKE '%"reused_within_7d":true%' THEN 1 ELSE 0 END),
 			AVG(correction_ratio)
 			FROM executions WHERE skill_version_id IN (SELECT id FROM skill_versions WHERE skill_id = ?)`,
 			ExecCompleted, ExecAbandoned, skillID).
-			Scan(&completed, &abandoned, &exported, &reused, &avgCorrection)
+			Scan(&completed, &abandoned, &reused, &avgCorrection)
 		_ = completed
-		adoption = float64(exported) / float64(callCount)
+
+		// adoption 口径（改动二）：不只看有没有导出，还要看用户有没有留下 verdict。
+		// 一次什么都没反馈的调用不算「被采纳」——这既是调用的对价，
+		// 也让这个指标本身更诚实（原来只看 exported 太松）。
+		var adopted int
+		db.QueryRow(`SELECT COUNT(DISTINCT e.id) FROM executions e
+			JOIN decision_verdicts dv ON dv.execution_id = e.id
+			WHERE e.skill_version_id IN (SELECT id FROM skill_versions WHERE skill_id = ?)
+			  AND e.completion_signal LIKE '%"exported":true%'`, skillID).Scan(&adopted)
+
+		adoption = float64(adopted) / float64(callCount)
 		abandon = float64(abandoned) / float64(callCount)
 		reuse = float64(reused) / float64(callCount)
 		if avgCorrection.Valid {
@@ -167,6 +196,20 @@ func recomputeSkillScore(skillID int64) *SkillScore {
 			0.25*(1-clamp01(abandon)) + 0.15*clamp01(reuse)
 	} else {
 		online = clamp01(offline * 0.8) // 冷启动先验
+	}
+
+	// 验证覆盖度（改动四）：被多少种不同背景验证过。
+	// 一个被同一类用户刷 50 次的 Skill，库存质量不如被 5 种不同背景各验证一次的，
+	// 但原来的公式会给前者更高分——因为它只数次数不看分布。
+	coverage := 0.0
+	if callCount > 0 {
+		var buckets int
+		db.QueryRow(`SELECT COUNT(DISTINCT COALESCE(u.grade,'') || '|' || COALESCE(u.major,''))
+			FROM executions e JOIN users u ON u.id = e.user_id
+			WHERE e.skill_version_id IN (SELECT id FROM skill_versions WHERE skill_id = ?)
+			  AND e.status = ?`, skillID, ExecCompleted).Scan(&buckets)
+		// 5 个不同背景桶视为覆盖充分
+		coverage = clamp01(float64(buckets) / 5.0)
 	}
 
 	// 第四层：维护状态
@@ -201,7 +244,10 @@ func recomputeSkillScore(skillID int64) *SkillScore {
 	}
 	maintenance := 0.40*versionActivity + 0.35*dependencyHealth + 0.25*issueResponse
 
-	quality := 0.40*clamp01(offline) + 0.35*clamp01(online) + 0.25*clamp01(maintenance)
+	// 从 online 的权重里挪 0.10 给覆盖度：同样的调用量，
+	// 被更多种背景验证过的 Skill 应该排在前面。
+	quality := 0.40*clamp01(offline) + 0.25*clamp01(online) +
+		0.10*clamp01(coverage) + 0.25*clamp01(maintenance)
 
 	var status string
 	db.QueryRow(`SELECT COALESCE(status,'') FROM skills WHERE id = ?`, skillID).Scan(&status)
@@ -214,16 +260,20 @@ func recomputeSkillScore(skillID int64) *SkillScore {
 		MaintenanceScore: clamp01(maintenance), QualityScore: clamp01(quality),
 		SampleSufficient: sampleSufficient, CandidateEligible: eligible,
 	}
+	sc.CoverageScore = clamp01(coverage)
 	db.Exec(`INSERT INTO skill_scores (skill_id, admission_passed, admission_failures, offline_score,
-		online_score, maintenance_score, quality_score, sample_sufficient, is_candidate_eligible, computed_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+		online_score, maintenance_score, coverage_score, quality_score, sample_sufficient,
+		is_candidate_eligible, computed_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
 		ON CONFLICT(skill_id) DO UPDATE SET admission_passed=excluded.admission_passed,
 		admission_failures=excluded.admission_failures, offline_score=excluded.offline_score,
 		online_score=excluded.online_score, maintenance_score=excluded.maintenance_score,
+		coverage_score=excluded.coverage_score,
 		quality_score=excluded.quality_score, sample_sufficient=excluded.sample_sufficient,
 		is_candidate_eligible=excluded.is_candidate_eligible, computed_at=CURRENT_TIMESTAMP`,
 		skillID, boolToInt(adm.Passed), sc.AdmissionFailures, sc.OfflineScore, sc.OnlineScore,
-		sc.MaintenanceScore, sc.QualityScore, boolToInt(sampleSufficient), boolToInt(eligible))
+		sc.MaintenanceScore, sc.CoverageScore, sc.QualityScore,
+		boolToInt(sampleSufficient), boolToInt(eligible))
 	db.Exec(`UPDATE skills SET quality_score = ? WHERE id = ?`, sc.QualityScore, skillID)
 	return sc
 }
@@ -487,7 +537,7 @@ func explainWhy(rc routeCandidate) string {
 		parts = append(parts, "关键测试已通过")
 	}
 	var hasSource int
-	db.QueryRow(`SELECT COUNT(*) FROM decisions WHERE skill_id = ?`, rc.SkillID).Scan(&hasSource)
+	db.QueryRow(decisionCountBySkillSQL, rc.SkillID).Scan(&hasSource)
 	if hasSource > 0 {
 		parts = append(parts, fmt.Sprintf("%d 条判断都能溯源到真实执行", hasSource))
 	}
@@ -557,7 +607,7 @@ func explainWhyNot(rc routeCandidate) string {
 		reasons = append(reasons, "没有任务测试")
 	}
 	var decCount int
-	db.QueryRow(`SELECT COUNT(*) FROM decisions WHERE skill_id = ?`, rc.SkillID).Scan(&decCount)
+	db.QueryRow(decisionCountBySkillSQL, rc.SkillID).Scan(&decCount)
 	if decCount == 0 {
 		reasons = append(reasons, "没有可溯源的判断")
 	}
@@ -608,7 +658,27 @@ func evidenceFor(rc routeCandidate) gin.H {
 	}
 	out["eval_pass"] = pass
 	var decCount int
-	db.QueryRow(`SELECT COUNT(*) FROM decisions WHERE skill_id = ? AND invalidated_at IS NULL`, rc.SkillID).Scan(&decCount)
+	db.QueryRow(validDecisionCountBySkillSQL, rc.SkillID).Scan(&decCount)
 	out["traceable_decisions"] = decCount
+
+	// 判断被别的 Skill 也引用了多少次——这是「流转」的直接证据，
+	// 也是它和一个静态文件最本质的区别。
+	var reused int
+	db.QueryRow(`SELECT COUNT(*) FROM skill_version_decisions l2
+		WHERE l2.decision_id IN (
+			SELECT l.decision_id FROM skill_version_decisions l
+			JOIN skills s ON s.current_version_id = l.skill_version_id WHERE s.id = ?)
+		AND l2.skill_version_id NOT IN (
+			SELECT current_version_id FROM skills WHERE id = ? AND current_version_id IS NOT NULL)`,
+		rc.SkillID, rc.SkillID).Scan(&reused)
+	out["decisions_reused_elsewhere"] = reused
+
+	// 被独立验证过多少次
+	var verified int
+	db.QueryRow(`SELECT COALESCE(SUM(d.verified_by_count), 0) FROM skill_version_decisions l
+		JOIN decisions d ON d.id = l.decision_id
+		JOIN skills s ON s.current_version_id = l.skill_version_id WHERE s.id = ?`,
+		rc.SkillID).Scan(&verified)
+	out["decision_verifications"] = verified
 	return out
 }

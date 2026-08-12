@@ -164,7 +164,6 @@ func loadTimeline(uid int64) []pathNode {
 	if err != nil {
 		return []pathNode{}
 	}
-	defer rows.Close()
 
 	nodes := []pathNode{}
 	for rows.Next() {
@@ -186,7 +185,14 @@ func loadTimeline(uid int64) []pathNode {
 			json.Unmarshal([]byte(signal), &sig)
 		}
 		n.Exported = sig.Exported
+		nodes = append(nodes, n)
+	}
+	rows.Close()
 
+	// SQLite 连接池只有一个连接。必须先关闭上面的 rows，再做逐节点统计，
+	// 否则 QueryRow 会等待被当前 rows 占用的同一个连接，形成自锁。
+	for i := range nodes {
+		n := &nodes[i]
 		db.QueryRow(`SELECT COUNT(*) FROM execution_steps WHERE execution_id = ?`, n.ExecutionID).
 			Scan(&n.StepCount)
 		db.QueryRow(`SELECT COUNT(*) FROM execution_steps WHERE execution_id = ?
@@ -204,7 +210,6 @@ func loadTimeline(uid int64) []pathNode {
 			n.SkillName = sname
 			n.SkillStatus = sstatus
 		}
-		nodes = append(nodes, n)
 	}
 	return nodes
 }
@@ -227,10 +232,11 @@ func execStatusLabel(s string) string {
 
 // computeGrowthStates 按任务方向算成长状态四阶。
 // 判定全部来自真实信号，没有任何自评：
-//   learned   调用过该方向的 Skill
-//   did       有已完成的执行
-//   succeeded 完成且把产物用出去了（exported）
-//   taught    自己产出的该方向 Skill 已发布，且被别人成功调用过
+//
+//	learned   调用过该方向的 Skill
+//	did       有已完成的执行
+//	succeeded 完成且把产物用出去了（exported）
+//	taught    自己产出的该方向 Skill 已发布，且被别人成功调用过
 func computeGrowthStates(uid int64) []gin.H {
 	state := map[string]string{}
 	detail := map[string]gin.H{}
@@ -338,30 +344,40 @@ func loadCapabilityAssets(uid int64, isSelf bool) []gin.H {
 	if err != nil {
 		return []gin.H{}
 	}
-	defer rows.Close()
 
-	out := []gin.H{}
+	type assetRow struct {
+		id                        int64
+		name, status, intent, ver string
+		distill, quality          float64
+	}
+	assets := []assetRow{}
 	for rows.Next() {
-		var id int64
-		var name, status, intent, version string
-		var distill, quality float64
-		if rows.Scan(&id, &name, &status, &intent, &version, &distill, &quality) != nil {
+		var item assetRow
+		if rows.Scan(&item.id, &item.name, &item.status, &item.intent, &item.ver,
+			&item.distill, &item.quality) != nil {
 			continue
 		}
+		assets = append(assets, item)
+	}
+	rows.Close()
+
+	// 与时间线相同，先释放结果集占用的唯一 SQLite 连接，再补充统计数据。
+	out := []gin.H{}
+	for _, item := range assets {
 		var decisionCount, callCount int
-		db.QueryRow(`SELECT COUNT(*) FROM decisions WHERE skill_id = ? AND invalidated_at IS NULL`, id).
+		db.QueryRow(validDecisionCountBySkillSQL, item.id).
 			Scan(&decisionCount)
 		db.QueryRow(`SELECT COUNT(*) FROM executions WHERE skill_version_id IN
-			(SELECT id FROM skill_versions WHERE skill_id = ?)`, id).Scan(&callCount)
+			(SELECT id FROM skill_versions WHERE skill_id = ?)`, item.id).Scan(&callCount)
 
 		out = append(out, gin.H{
-			"skill_id":            id,
-			"name":                name,
-			"status":              status,
-			"status_label":        skillStatusLabel(status),
-			"task_label":          AllowedIntents[intent],
-			"version":             version,
-			"distillation_score":  distill,
+			"skill_id":            item.id,
+			"name":                item.name,
+			"status":              item.status,
+			"status_label":        skillStatusLabel(item.status),
+			"task_label":          AllowedIntents[item.intent],
+			"version":             item.ver,
+			"distillation_score":  item.distill,
 			"traceable_decisions": decisionCount,
 			"call_count":          callCount,
 		})
@@ -425,21 +441,38 @@ func loadInfluence(uid int64) gin.H {
 	db.QueryRow(`SELECT COUNT(*) FROM skills WHERE maintainer_id = ? AND owner_id IS NOT NULL
 		AND owner_id != ?`, uid, uid).Scan(&maintaining)
 
-	// 判断被别人的 Skill 复用（被组合的近似）
+	// 我贡献过多少条判断（用 origin_user_id 直接算，不再绕执行表两跳）
 	var decisionsContributed int
-	db.QueryRow(`SELECT COUNT(*) FROM decisions d
-		JOIN executions e ON e.id = d.experience_exec_id
-		WHERE e.user_id = ? AND d.invalidated_at IS NULL`, uid).Scan(&decisionsContributed)
+	db.QueryRow(`SELECT COUNT(*) FROM decisions
+		WHERE origin_user_id = ? AND invalidated_at IS NULL`, uid).Scan(&decisionsContributed)
+
+	// 我的判断被多少个 Skill 版本引用——判断是流通的最小单位，
+	// 这个数才真正代表「我的经验获得了多大规模」。
+	var decisionsAdoptedElsewhere int
+	db.QueryRow(`SELECT COUNT(*) FROM skill_version_decisions l
+		JOIN decisions d ON d.id = l.decision_id
+		JOIN skill_versions v ON v.id = l.skill_version_id
+		JOIN skills s ON s.id = v.skill_id
+		WHERE d.origin_user_id = ? AND COALESCE(s.owner_id, 0) != ?`,
+		uid, uid).Scan(&decisionsAdoptedElsewhere)
+
+	// 我的判断被独立验证过多少次
+	var decisionVerifications int
+	db.QueryRow(`SELECT COALESCE(SUM(verified_by_count), 0) FROM decisions
+		WHERE origin_user_id = ?`, uid).Scan(&decisionVerifications)
 
 	return gin.H{
-		"helped_people":         helpedPeople,
-		"effective_completions": effectiveCompletions,
-		"successors":            successors,
-		"adopted_feedback":      adoptedFeedback,
-		"maintaining_others":    maintaining,
-		"decisions_contributed": decisionsContributed,
-		"note":                  "这里没有粉丝数。后继者的意思是：用了你的方法、并且自己真的把事做成了的人。",
-		"successor_basis":       "当前用执行数据近似；成长路径图谱上线后会改用真实跟走关系。",
+		"helped_people":                helpedPeople,
+		"effective_completions":        effectiveCompletions,
+		"successors":                   successors,
+		"adopted_feedback":             adoptedFeedback,
+		"maintaining_others":           maintaining,
+		"decisions_contributed":        decisionsContributed,
+		"decisions_adopted_elsewhere":  decisionsAdoptedElsewhere,
+		"decision_verifications":       decisionVerifications,
+		"note":                         "这里没有粉丝数。后继者的意思是：用了你的方法、并且自己真的把事做成了的人。",
+		"circulation_note":             "「被别的 Skill 引用」和「被独立验证」是你的经验真正流转起来的证据——一条判断每被验证一次就更值钱一点。",
+		"successor_basis":              "当前用执行数据近似；成长路径图谱上线后会改用真实跟走关系。",
 	}
 }
 

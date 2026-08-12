@@ -267,6 +267,7 @@ type Decision struct {
 	CounterExample  string     `json:"counter_example,omitempty"`
 	SourceStepIndex int        `json:"source_step_index"`
 	VerifiedByCount int        `json:"verified_by_count"`
+	OriginUserID    int64      `json:"origin_user_id,omitempty"`
 	InvalidatedAt   *time.Time `json:"invalidated_at,omitempty"`
 	CreatedAt       time.Time  `json:"created_at"`
 }
@@ -314,6 +315,7 @@ type SkillScore struct {
 	OfflineScore     float64   `json:"offline_score"`
 	OnlineScore      float64   `json:"online_score"`
 	MaintenanceScore float64   `json:"maintenance_score"`
+	CoverageScore    float64   `json:"coverage_score"`
 	QualityScore     float64   `json:"quality_score"`
 	SampleSufficient bool      `json:"sample_sufficient"`
 	CandidateEligible bool     `json:"is_candidate_eligible"`
@@ -476,6 +478,37 @@ CREATE TABLE IF NOT EXISTS description_corpus (
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
+-- ---------- 判断作为流通的最小单位 ----------
+-- Skill 是容器，判断是内容物。一条判断可以被多个 Skill 版本引用，
+-- 并在被引用与被验证的过程中增值——这才是「经验获得规模」的真实形态。
+-- 挂在 version 而不是 skill 上：V1.1 新增一条判断要能被记下来。
+CREATE TABLE IF NOT EXISTS skill_version_decisions (
+  skill_version_id INTEGER NOT NULL,
+  decision_id INTEGER NOT NULL,
+  workflow_step_index INTEGER DEFAULT 0,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (skill_version_id, decision_id)
+);
+
+-- 调用的代价：用完之后留下一条「这次它在你的情况下成立吗」。
+-- 没有 verdict 的调用不计入 adoption——一次什么都没反馈的调用，
+-- 我们凭什么说它「被采纳了」。
+CREATE TABLE IF NOT EXISTS decision_verdicts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  decision_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  execution_id INTEGER NOT NULL,
+  verdict TEXT NOT NULL,
+  note TEXT DEFAULT '',
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (decision_id, execution_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_svd_ver ON skill_version_decisions(skill_version_id);
+CREATE INDEX IF NOT EXISTS idx_svd_dec ON skill_version_decisions(decision_id);
+CREATE INDEX IF NOT EXISTS idx_verdict_dec ON decision_verdicts(decision_id);
+CREATE INDEX IF NOT EXISTS idx_verdict_exec ON decision_verdicts(execution_id);
+
 -- ---------- 编排态（F17）----------
 -- Path：多次执行串成的顺序与节奏，编排态的供给物。
 -- provenance 决定它能对外给什么信息：retrospective 只给顺序，不给耗时与卡点。
@@ -583,6 +616,12 @@ CREATE INDEX IF NOT EXISTS idx_corpus_intent ON description_corpus(task_intent);
 		"ALTER TABLE users ADD COLUMN profile_visibility TEXT DEFAULT ''",
 		// v1.2：证据来源类型。artifact_upload（轨迹补录）的蒸馏度封顶 0.85。
 		"ALTER TABLE skill_versions ADD COLUMN proof_type TEXT DEFAULT 'platform_trace'",
+		// 判断的贡献者。原来要从 experience_exec_id → executions.user_id 绕两跳，
+		// 归属计算很别扭，这里直接冗余一列。
+		"ALTER TABLE decisions ADD COLUMN origin_user_id INTEGER",
+		// 验证覆盖度：被多少种不同背景验证过。一个被同一类用户刷 50 次的 Skill，
+		// 库存质量不如被 5 种不同背景各验证一次的。
+		"ALTER TABLE skill_scores ADD COLUMN coverage_score REAL DEFAULT 0",
 	}
 	for _, m := range growthMigrations {
 		if _, err := db.Exec(m); err != nil {
@@ -592,9 +631,38 @@ CREATE INDEX IF NOT EXISTS idx_corpus_intent ON description_corpus(task_intent);
 		}
 	}
 
+	backfillDecisionLinks()
+	initResumeSchema()
+
 	seedCorpus()
 	seedPaths()
 	log.Println("growth schema initialized")
+}
+
+// backfillDecisionLinks 把老数据迁到关联表。
+//
+// decisions.skill_id 这个单外键是之前实现时图省事留下的，它挡住了判断跨 Skill 流动。
+// 这里不删那一列（老数据还在里面，删了会丢），而是把它表达的关系搬进关联表，
+// 之后的读写一律走关联表。
+func backfillDecisionLinks() {
+	// 1) 关联关系：decisions.skill_id → 该 Skill 的当前版本
+	res, err := db.Exec(`INSERT OR IGNORE INTO skill_version_decisions
+		(skill_version_id, decision_id, workflow_step_index)
+		SELECT s.current_version_id, d.id, d.source_step_index
+		FROM decisions d JOIN skills s ON s.id = d.skill_id
+		WHERE d.skill_id IS NOT NULL AND s.current_version_id IS NOT NULL`)
+	if err != nil {
+		log.Printf("backfill decision links failed: %v", err)
+	} else if n, _ := res.RowsAffected(); n > 0 {
+		log.Printf("backfilled %d decision links", n)
+	}
+
+	// 2) 贡献者：从来源执行反查
+	if _, err := db.Exec(`UPDATE decisions SET origin_user_id = (
+		SELECT e.user_id FROM executions e WHERE e.id = decisions.experience_exec_id)
+		WHERE origin_user_id IS NULL`); err != nil {
+		log.Printf("backfill decision origin failed: %v", err)
+	}
 }
 
 // seedPaths 预置一条保研 Path 作为编排态的来源。

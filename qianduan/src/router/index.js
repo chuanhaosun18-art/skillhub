@@ -6,7 +6,7 @@ const routes = [
     path: '/',
     name: 'home',
     component: () => import('../views/Home.vue'),
-    meta: { title: 'SkillHub - 技能发现与分享平台' },
+    meta: { title: 'WowSkillLand - 大学生成长复利系统' },
   },
   {
     path: '/search',
@@ -38,6 +38,16 @@ const routes = [
     component: () => import('../views/Profile.vue'),
     meta: { title: '个人中心', requiresAuth: true },
   },
+  // ---------- 单一入口 ----------
+  // 所有能力收口到这里。下面那些页面全部保留，但只作为深链与兜底：
+  // Trust Card 要能被分享、快照要能被外部访问、Creator 的四槽在完整页面里更好操作。
+  {
+    path: '/a',
+    name: 'agent',
+    component: () => import('../views/Agent.vue'),
+    meta: { title: 'WowSkillLand', requiresAuth: true },
+  },
+
   // ---------- 成长闭环（PRD P0）----------
   {
     path: '/grow',
@@ -101,7 +111,7 @@ router.beforeEach((to) => {
 })
 
 router.afterEach((to) => {
-  document.title = to.meta.title || 'SkillHub'
+  document.title = to.meta.title || 'WowSkillLand'
 })
 
 export default router

@@ -169,7 +169,7 @@ function goDetail(id) {
     </main>
 
     <footer class="footer">
-      <span>SkillHub © 2026 · 技能发现与分享平台</span>
+      <span>WowSkillLand © 2026 · 大学生成长复利系统</span>
     </footer>
   </div>
 </template>

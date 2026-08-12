@@ -1,7 +1,7 @@
 // 后端 API 层：Go + Gin + SQLite，地址 http://localhost:8080
 import { getToken } from './auth'
 
-const BASE = 'http://localhost:8080'
+const BASE = import.meta.env.VITE_API_BASE || ''
 
 // 后端返回的 skill 字段转换成前端友好的结构
 function normalizeSkill(s) {

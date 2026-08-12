@@ -1,7 +1,7 @@
 // 认证 API 层 + 登录态管理（JWT token 存 localStorage）
 import { reactive } from 'vue'
 
-const BASE = 'http://localhost:8080'
+const BASE = import.meta.env.VITE_API_BASE || ''
 const TOKEN_KEY = 'skillhub_token'
 const USER_KEY = 'skillhub_user'
 

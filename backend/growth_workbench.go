@@ -430,6 +430,12 @@ func completeExecution(c *gin.Context) {
 	if s := suggestOrchestration(exec.TaskIntent); s != nil {
 		resp["orchestration_suggestion"] = s
 	}
+	// 用了别人的 Skill 就该留下一句「它在你这儿成不成立」。
+	// 不弹窗、不阻塞，但不表态这次调用不计入采纳率。
+	if exec.SkillVersionID != nil && *exec.SkillVersionID > 0 {
+		resp["verdict_required"] = true
+		resp["verdict_hint"] = "这次用的是别人的方法。留一句它在你的情况下成不成立，它才会变好——不表态的话这次调用不计入采纳率。"
+	}
 	c.JSON(http.StatusOK, resp)
 }
 

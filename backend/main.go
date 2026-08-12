@@ -57,7 +57,14 @@ func main() {
 	// 主张：做事发生在平台内 → 供给是执行的副产品 → 信任来自证据而非评分
 	growth := r.Group("/api/growth")
 	{
+		// 单一入口 Agent：所有能力收口到一个对话流。
+		// state 用规则推导「现在该做什么」，say 才调模型判意图——
+		// 这样 Demo 的每一幕都是确定性的，不会因为模型判偏而断链。
+		growth.GET("/agent/state", authMiddleware(), agentState)
+		growth.POST("/agent/say", authMiddleware(), agentSay)
+
 		// F1 目标识别与四筛判定（伪需求在这里被拦住，不进任务流）
+		// 保留：agent 内部复用它的分发规则，旧入口也仍可直接用
 		growth.POST("/goals/interpret", authMiddleware(), interpretGoal)
 
 		// F4 任务工作台：所有执行必须落 execution_steps
@@ -95,6 +102,13 @@ func main() {
 		// F5.3b 轨迹补录：承认用户会在平台外做事，但蒸馏度封顶 0.85
 		growth.POST("/backfill", authMiddleware(), backfillExecution)
 
+		// 完成标准的受控词表：SKU 要「可比较」就得有公共语言
+		growth.GET("/criteria-vocab", getCriteriaVocab)
+
+		// 调用的代价：用完留下一句「它在你的情况下成立吗」
+		growth.GET("/executions/:id/pending-verdicts", authMiddleware(), getPendingVerdicts)
+		growth.POST("/executions/:id/verdicts", authMiddleware(), submitVerdicts)
+
 		// F17 编排态：长周期方向性需求。只承诺编排，不承诺结果。
 		// probe 与 interview 单独命名，避免与 /orchestrations/:id 在同级产生静态段与参数段冲突
 		growth.POST("/orch-probe", authMiddleware(), probeOrchestration)
@@ -105,6 +119,13 @@ func main() {
 		growth.POST("/orchestrations/:id/adopt", authMiddleware(), adoptOrchestration)
 		growth.PATCH("/orchestrations/:id/items/:itemId", authMiddleware(), updateOrchItem)
 		growth.POST("/orchestrations/:id/reviews", authMiddleware(), reviewOrchestration)
+
+		// F18 能力简历：SKU 累积起来构成一个可验证的「我」
+		growth.GET("/resume", authMiddleware(), getMyResume)
+		growth.POST("/resume/snapshots", authMiddleware(), createSnapshot)
+		growth.GET("/resume/snapshots", authMiddleware(), listSnapshots)
+		growth.POST("/resume/snapshots/:token/revoke", authMiddleware(), revokeSnapshot)
+		growth.GET("/shared/:token", getSharedSnapshot) // 无需登录
 
 		// F13 个人成长主页与成长身份（成长路径从真实执行派生）
 		// 注意：my-profile 与 profile/:id 分开命名，避免静态段与参数段在同级冲突

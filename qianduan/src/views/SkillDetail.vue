@@ -257,7 +257,7 @@ function renderMarkdown(text) {
 
 function download() {
   if (!skill.value) return
-  window.open(`http://localhost:8080/api/skills/${skill.value.id}/download`, '_blank')
+  window.open(`/api/skills/${skill.value.id}/download`, '_blank')
 }
 
 function goBack() {
@@ -537,7 +537,7 @@ function goBack() {
     </main>
 
     <footer class="footer">
-      <span>SkillHub © 2026 · 技能发现与分享平台</span>
+      <span>WowSkillLand © 2026 · 大学生成长复利系统</span>
     </footer>
   </div>
 </template>

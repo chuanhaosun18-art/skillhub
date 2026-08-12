@@ -22,14 +22,14 @@ function goProfile() {
   router.push('/profile')
 }
 
-// 「我要成长」：用户用一句人话说清卡在哪，系统给下一步并路由能力
+// 唯一入口。所有能力都从这一个对话流进去，agent 决定下一步给什么。
 function goGrow() {
   if (!authState.token) {
     ElMessage.warning('登录后才能记录你的成长轨迹')
     router.push('/login')
     return
   }
-  router.push('/grow')
+  router.push('/a')
 }
 
 function goWorkbench() {
@@ -53,7 +53,7 @@ async function logout() {
     <div class="navbar-inner">
       <div class="logo" @click="router.push('/')">
         <el-icon :size="24" color="#409eff"><Connection /></el-icon>
-        <span class="logo-text">SkillHub</span>
+        <span class="logo-text">WowSkillLand</span>
       </div>
 
       <!-- 中间区域：调用方通过 slot 传入搜索框等 -->

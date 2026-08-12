@@ -63,7 +63,11 @@ func getTrustCard(c *gin.Context) {
 	}
 
 	// 分区二：流程（每个岔路口可下钻）
-	decisions := loadDecisions(skillID)
+	// 判断挂在版本上，所以按版本读；没有版本就没有判断可展示。
+	decisions := []Decision{}
+	if versionID.Valid && versionID.Int64 > 0 {
+		decisions = loadDecisions(versionID.Int64)
+	}
 	decByStep := map[int][]gin.H{}
 	for _, d := range decisions {
 		if d.InvalidatedAt != nil {

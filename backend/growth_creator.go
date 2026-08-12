@@ -324,9 +324,17 @@ func distillExecution(c *gin.Context) {
 			dropped++
 			continue
 		}
-		db.Exec(`INSERT INTO decisions (experience_exec_id, skill_id, slot, trigger_signal, judgment, scope,
-			counter_example, source_step_index) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-			id, skillID, d.Slot, d.TriggerSignal, d.Judgment, d.Scope, d.CounterExample, d.SourceStepIndex)
+		decRes, decErr := db.Exec(`INSERT INTO decisions (experience_exec_id, skill_id, origin_user_id,
+			slot, trigger_signal, judgment, scope, counter_example, source_step_index)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			id, skillID, uid, d.Slot, d.TriggerSignal, d.Judgment, d.Scope,
+			d.CounterExample, d.SourceStepIndex)
+		if decErr != nil {
+			dropped++
+			continue
+		}
+		decID, _ := decRes.LastInsertId()
+		linkDecision(versionID, decID, d.SourceStepIndex)
 		kept++
 	}
 	log.Printf("distill exec=%d skill=%d decisions kept=%d dropped=%d", id, skillID, kept, dropped)
@@ -491,9 +499,15 @@ func backfillExecution(c *gin.Context) {
 		if idx < 0 || idx > 1 {
 			idx = 1
 		}
-		db.Exec(`INSERT INTO decisions (experience_exec_id, skill_id, slot, trigger_signal, judgment,
-			scope, source_step_index) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-			execID, skillID, d.Slot, d.TriggerSignal, d.Judgment, d.Scope, idx)
+		decRes, decErr := db.Exec(`INSERT INTO decisions (experience_exec_id, skill_id, origin_user_id,
+			slot, trigger_signal, judgment, scope, source_step_index)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			execID, skillID, uid, d.Slot, d.TriggerSignal, d.Judgment, d.Scope, idx)
+		if decErr != nil {
+			continue
+		}
+		decID, _ := decRes.LastInsertId()
+		linkDecision(versionID, decID, idx)
 		kept++
 	}
 
@@ -632,20 +646,33 @@ func upsertDecision(c *gin.Context) {
 	db.QueryRow(`SELECT COALESCE(source_execution_id, 0) FROM skill_versions WHERE id = ?`, vid).Scan(&execID)
 
 	if body.ID != nil && *body.ID > 0 {
-		db.Exec(`UPDATE decisions SET slot=?, trigger_signal=?, judgment=?, scope=?, counter_example=?, source_step_index=?
-			WHERE id = ? AND skill_id = ?`,
-			body.Slot, body.TriggerSignal, body.Judgment, body.Scope, body.CounterExample, body.SourceStepIndex,
-			*body.ID, skillID)
+		// 只允许改本版本引用的那条。判断现在可能被别的 Skill 也引用着，
+		// 不能顺手改掉不属于这个草稿的东西。
+		db.Exec(`UPDATE decisions SET slot=?, trigger_signal=?, judgment=?, scope=?,
+			counter_example=?, source_step_index=?
+			WHERE id = ? AND id IN (SELECT decision_id FROM skill_version_decisions
+			WHERE skill_version_id = ?)`,
+			body.Slot, body.TriggerSignal, body.Judgment, body.Scope, body.CounterExample,
+			body.SourceStepIndex, *body.ID, vid)
 	} else {
-		db.Exec(`INSERT INTO decisions (experience_exec_id, skill_id, slot, trigger_signal, judgment, scope,
-			counter_example, source_step_index) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-			execID, skillID, body.Slot, body.TriggerSignal, body.Judgment, body.Scope,
+		decRes, err := db.Exec(`INSERT INTO decisions (experience_exec_id, skill_id, origin_user_id,
+			slot, trigger_signal, judgment, scope, counter_example, source_step_index)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			execID, skillID, uid, body.Slot, body.TriggerSignal, body.Judgment, body.Scope,
 			body.CounterExample, body.SourceStepIndex)
+		if err == nil {
+			decID, _ := decRes.LastInsertId()
+			linkDecision(vid, decID, body.SourceStepIndex)
+		}
 	}
 	respondDraft(c, vid)
 }
 
 // deleteDecision DELETE /api/growth/decisions/:id
+//
+// 语义变了：判断可以被多个 Skill 版本引用，所以「删除」实际是**解除本版本的引用**。
+// 只有当没有任何版本再引用它时才真正删掉。
+// 否则一个人从自己草稿里删一条判断，会把别人 Skill 里正在用的东西一起抹掉。
 func deleteDecision(c *gin.Context) {
 	uid := c.GetInt64("userID")
 	did, err := strconv.ParseInt(c.Param("id"), 10, 64)
@@ -653,22 +680,33 @@ func deleteDecision(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
 		return
 	}
-	var skillID int64
-	var ownerID sql.NullInt64
-	if err := db.QueryRow(`SELECT d.skill_id, s.owner_id FROM decisions d
-		JOIN skills s ON s.id = d.skill_id WHERE d.id = ?`, did).Scan(&skillID, &ownerID); err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "decision not found"})
-		return
-	}
-	if !ownerID.Valid || ownerID.Int64 != uid {
-		c.JSON(http.StatusForbidden, gin.H{"error": "仅创作者可删除"})
-		return
-	}
-	db.Exec(`DELETE FROM decisions WHERE id = ?`, did)
 
-	var vid int64
-	db.QueryRow(`SELECT COALESCE(current_version_id,0) FROM skills WHERE id = ?`, skillID).Scan(&vid)
-	respondDraft(c, vid)
+	// 找出这条判断在「当前用户拥有的版本」上的引用
+	var versionID int64
+	var ownerID sql.NullInt64
+	if err := db.QueryRow(`SELECT l.skill_version_id, s.owner_id
+		FROM skill_version_decisions l
+		JOIN skill_versions v ON v.id = l.skill_version_id
+		JOIN skills s ON s.id = v.skill_id
+		WHERE l.decision_id = ? AND s.owner_id = ?
+		ORDER BY l.skill_version_id DESC LIMIT 1`, did, uid).Scan(&versionID, &ownerID); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "这条判断不在你的草稿里"})
+		return
+	}
+
+	db.Exec(`DELETE FROM skill_version_decisions WHERE decision_id = ? AND skill_version_id = ?`,
+		did, versionID)
+
+	// 没有任何版本再引用 → 真正删掉；否则保留，它还在别处流转
+	var refs int
+	db.QueryRow(`SELECT COUNT(*) FROM skill_version_decisions WHERE decision_id = ?`, did).Scan(&refs)
+	if refs == 0 {
+		db.Exec(`DELETE FROM decisions WHERE id = ?`, did)
+	} else {
+		log.Printf("decision %d unlinked from version %d, still referenced by %d version(s)",
+			did, versionID, refs)
+	}
+	respondDraft(c, versionID)
 }
 
 // downgradeToInsight POST /api/growth/drafts/:versionID/downgrade
@@ -1051,10 +1089,16 @@ func loadSkillVersion(versionID int64) (*SkillVersion, error) {
 	return &v, nil
 }
 
-func loadDecisions(skillID int64) []Decision {
-	rows, err := db.Query(`SELECT id, experience_exec_id, skill_id, slot, trigger_signal, judgment, scope,
-		counter_example, source_step_index, verified_by_count, invalidated_at, created_at
-		FROM decisions WHERE skill_id = ? ORDER BY slot, id`, skillID)
+// loadDecisions 读某个版本引用的所有判断。
+//
+// 走关联表而不是 decisions.skill_id —— 一条判断可以被多个 Skill 版本引用，
+// 它的验证次数与归属跨 Skill 累积。这是 SKU 真正流转的载体。
+func loadDecisions(versionID int64) []Decision {
+	rows, err := db.Query(`SELECT d.id, d.experience_exec_id, d.skill_id, d.slot, d.trigger_signal,
+		d.judgment, d.scope, d.counter_example, d.source_step_index, d.verified_by_count,
+		COALESCE(d.origin_user_id, 0), d.invalidated_at, d.created_at
+		FROM skill_version_decisions l JOIN decisions d ON d.id = l.decision_id
+		WHERE l.skill_version_id = ? ORDER BY d.slot, d.id`, versionID)
 	if err != nil {
 		return nil
 	}
@@ -1065,7 +1109,8 @@ func loadDecisions(skillID int64) []Decision {
 		var sid sql.NullInt64
 		var inval sql.NullTime
 		if err := rows.Scan(&d.ID, &d.ExperienceExecID, &sid, &d.Slot, &d.TriggerSignal, &d.Judgment,
-			&d.Scope, &d.CounterExample, &d.SourceStepIndex, &d.VerifiedByCount, &inval, &d.CreatedAt); err != nil {
+			&d.Scope, &d.CounterExample, &d.SourceStepIndex, &d.VerifiedByCount,
+			&d.OriginUserID, &inval, &d.CreatedAt); err != nil {
 			continue
 		}
 		if sid.Valid {
@@ -1078,13 +1123,22 @@ func loadDecisions(skillID int64) []Decision {
 	return out
 }
 
+// linkDecision 把一条判断挂到某个版本上。所有新增判断都必须走这里。
+func linkDecision(versionID, decisionID int64, stepIndex int) {
+	if _, err := db.Exec(`INSERT OR IGNORE INTO skill_version_decisions
+		(skill_version_id, decision_id, workflow_step_index) VALUES (?, ?, ?)`,
+		versionID, decisionID, stepIndex); err != nil {
+		log.Printf("link decision %d to version %d failed: %v", decisionID, versionID, err)
+	}
+}
+
 // loadDraftParts 一次性取出草稿三件套
 func loadDraftParts(versionID int64) (*Execution, *SkillVersion, []Decision, error) {
 	ver, err := loadSkillVersion(versionID)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	decisions := loadDecisions(ver.SkillID)
+	decisions := loadDecisions(ver.ID)
 	var execID sql.NullInt64
 	db.QueryRow(`SELECT source_execution_id FROM skill_versions WHERE id = ?`, versionID).Scan(&execID)
 	var exec *Execution
