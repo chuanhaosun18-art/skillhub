@@ -1,3 +1,13 @@
+# SkillHub / WowSkillLand
+
+本分支（`feature/wowskillland-demo`）在原 SkillHub 后端之上，加上了面向大学生迷茫期的前端 Demo。
+
+- 产品说明与启动：[wowskillland-app/README.md](wowskillland-app/README.md)
+- 产品设计：[docs/WowSkillLand_产品设计.md](docs/WowSkillLand_产品设计.md) · [HTML 版](docs/迷茫期路由器_产品设计.html)
+- 成长闭环后端：[GROWTH_README.md](GROWTH_README.md)
+
+---
+
 # SkillHub —— AI 技能分享与发布平台
 
 一个面向「AI 技能（Skill）」的分享平台：用户可以浏览、搜索、下载别人封装的 Skill，也可以把自
