@@ -11,6 +11,7 @@ func main() {
 	initDB()
 	initPersonaSchema()
 	initChatSchema()
+	initNotificationsSchema()
 
 	r := gin.Default()
 
@@ -82,6 +83,12 @@ func main() {
 	api.GET("/chat/direct", authMiddleware(), listDirectChats)
 	api.POST("/chat/direct/:id/messages", authMiddleware(), sendDirectMessage)
 	api.GET("/chat/direct/:id/messages", authMiddleware(), getDirectMessages)
+
+	// 消息通知（Notifications）：铃铛角标 + 通知列表
+	api.GET("/notifications", authMiddleware(), listNotifications)
+	api.GET("/notifications/unread-count", authMiddleware(), unreadNotifications)
+	api.POST("/notifications/read", authMiddleware(), markNotificationsRead)
+	api.POST("/notifications/:id/read", authMiddleware(), markNotificationRead)
 	}
 
 	// ---------- 成长闭环（PRD P0）----------

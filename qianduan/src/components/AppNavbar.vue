@@ -1,9 +1,92 @@
 <script setup>
+import { ref, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import { authState, clearAuth } from '../api/auth'
+import { getUnreadCount, fetchNotifications, markAllRead, markRead } from '../api/notifications'
 
 const router = useRouter()
+
+// ---------- 消息通知：铃铛角标 + 下拉列表 + 轮询未读数 ----------
+const unreadCount = ref(0)
+const notifList = ref([])
+const notifVisible = ref(false)
+const notifLoading = ref(false)
+let notifTimer = null
+
+const notifTypeMeta = {
+  message: { icon: 'ChatDotRound', text: '私信', color: '#409eff' },
+  review: { icon: 'Star', text: '评价', color: '#e6a23c' },
+  issue: { icon: 'Warning', text: '改进意见', color: '#f56c6c' },
+}
+
+async function pollUnread() {
+  if (!authState.token) return
+  try {
+    unreadCount.value = await getUnreadCount()
+  } catch (e) {
+    /* 网络/后端未就绪时静默 */
+  }
+}
+
+async function openNotif() {
+  if (!authState.token) return
+  notifVisible.value = true
+  notifLoading.value = true
+  try {
+    notifList.value = await fetchNotifications()
+  } catch (e) {
+    /* ignore */
+  } finally {
+    notifLoading.value = false
+  }
+}
+
+async function notifGo(n) {
+  // 点击单条：标记已读并跳转
+  if (!n.is_read) {
+    markRead(n.id).catch(() => {})
+    n.is_read = 1
+    unreadCount.value = Math.max(0, unreadCount.value - 1)
+  }
+  notifVisible.value = false
+  if (n.type === 'message') {
+    router.push({ path: `/chat/${n.related_id}`, query: { name: n.actor_name } })
+  } else {
+    router.push(`/skill/${n.related_id}`)
+  }
+}
+
+async function readAll() {
+  try {
+    await markAllRead()
+  } catch (e) {
+    /* ignore */
+  }
+  notifList.value.forEach((n) => (n.is_read = 1))
+  unreadCount.value = 0
+}
+
+function fmtTime(t) {
+  if (!t) return ''
+  const d = new Date(t)
+  if (isNaN(d.getTime())) return ''
+  const diff = Date.now() - d.getTime()
+  if (diff < 60 * 1000) return '刚刚'
+  if (diff < 60 * 60 * 1000) return Math.floor(diff / 60000) + ' 分钟前'
+  if (diff < 24 * 60 * 60 * 1000) return Math.floor(diff / 3600000) + ' 小时前'
+  const p = (x) => String(x).padStart(2, '0')
+  return `${d.getMonth() + 1}-${d.getDate()} ${p(d.getHours())}:${p(d.getMinutes())}`
+}
+
+onMounted(() => {
+  pollUnread()
+  notifTimer = setInterval(pollUnread, 15000)
+})
+
+onUnmounted(() => {
+  if (notifTimer) clearInterval(notifTimer)
+})
 
 function goLogin() {
   router.push('/login')
@@ -67,6 +150,55 @@ async function logout() {
         <el-button text class="grow-entry" @click="router.push('/forum')">论坛</el-button>
         <el-button v-if="authState.user" text @click="goWorkbench">我的任务</el-button>
         <template v-if="authState.user">
+          <!-- 消息通知铃铛：角标显示未读数 -->
+          <el-popover
+            v-model:visible="notifVisible"
+            placement="bottom-end"
+            :width="340"
+            trigger="click"
+            popper-class="notif-popper"
+            @show="openNotif"
+          >
+            <template #reference>
+              <el-badge :value="unreadCount" :hidden="unreadCount === 0" :max="99">
+                <el-button text class="notif-bell">
+                  <el-icon :size="20"><Bell /></el-icon>
+                </el-button>
+              </el-badge>
+            </template>
+
+            <div class="notif-panel">
+              <div class="notif-head">
+                <span class="notif-title">消息通知</span>
+                <el-button link type="primary" size="small" @click="readAll">全部已读</el-button>
+              </div>
+              <div v-if="notifLoading" class="notif-empty">加载中...</div>
+              <div v-else-if="notifList.length === 0" class="notif-empty">暂无通知</div>
+              <div v-else class="notif-list">
+                <div
+                  v-for="n in notifList"
+                  :key="n.id"
+                  class="notif-item"
+                  :class="{ 'notif-item-unread': !n.is_read }"
+                  @click="notifGo(n)"
+                >
+                  <el-icon :size="16" :color="(notifTypeMeta[n.type] || {}).color">
+                    <component :is="(notifTypeMeta[n.type] || { icon: 'Bell' }).icon" />
+                  </el-icon>
+                  <div class="notif-body">
+                    <div class="notif-text">
+                      <span class="notif-actor">{{ n.actor_name || '用户' }}</span>
+                      <span class="notif-meta">{{ (notifTypeMeta[n.type] || {}).text || n.type }}</span>
+                      <span v-if="n.skill_name" class="notif-skill">《{{ n.skill_name }}》</span>
+                    </div>
+                    <div class="notif-content">{{ n.content }}</div>
+                    <div class="notif-time">{{ fmtTime(n.created_at) }}</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </el-popover>
+
           <el-button round @click="goPublish">
             <el-icon style="margin-right: 4px"><Plus /></el-icon>上传已有 Skill
           </el-button>
@@ -162,5 +294,122 @@ async function logout() {
 .username {
   font-size: 14px;
   color: #303133;
+}
+
+.notif-bell {
+  padding: 6px;
+  margin: 0 4px;
+}
+
+.notif-panel {
+  max-height: 420px;
+  display: flex;
+  flex-direction: column;
+}
+
+.notif-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px 10px;
+  border-bottom: 1px solid #f0f2f5;
+}
+
+.notif-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #303133;
+}
+
+.notif-empty {
+  text-align: center;
+  color: #909399;
+  font-size: 13px;
+  padding: 28px 0;
+}
+
+.notif-list {
+  overflow-y: auto;
+  flex: 1;
+}
+
+.notif-item {
+  display: flex;
+  gap: 10px;
+  padding: 10px 8px;
+  border-bottom: 1px solid #f5f7fa;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.notif-item:hover {
+  background: #f5f7fa;
+}
+
+.notif-item-unread .notif-body {
+  background: transparent;
+}
+
+.notif-item-unread::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #f56c6c;
+  flex-shrink: 0;
+  margin-top: 6px;
+}
+
+.notif-item-unread .notif-text,
+.notif-item-unread .notif-content {
+  font-weight: 600;
+}
+
+.notif-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.notif-text {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 13px;
+}
+
+.notif-actor {
+  color: #303133;
+  font-weight: 600;
+}
+
+.notif-meta {
+  color: #909399;
+  font-size: 12px;
+  background: #f0f2f5;
+  border-radius: 4px;
+  padding: 0 6px;
+}
+
+.notif-skill {
+  color: #409eff;
+  font-size: 12px;
+}
+
+.notif-content {
+  color: #606266;
+  font-size: 13px;
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.notif-time {
+  color: #c0c4cc;
+  font-size: 12px;
+  margin-top: 2px;
 }
 </style>

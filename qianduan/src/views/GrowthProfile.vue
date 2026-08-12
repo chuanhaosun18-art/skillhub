@@ -96,7 +96,7 @@ async function startDirectChat() {
   if (!requireLogin()) return
   starting.value = true
   try {
-    const res = await createDirectChat(userId.value)
+    const res = await createDirectChat(Number(userId.value))
     router.push(`/chat/${res.chat_id}`)
   } catch (e) {
     ElMessage.error(e.message || '发起聊天失败')

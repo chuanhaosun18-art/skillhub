@@ -3,6 +3,8 @@ import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { getSkillById, explainSkill, submitReview, getReviews, createIssue, getIssues, updateIssueStatus } from '../api/skills'
+import { createDirectChat } from '../api/chat'
+import { getPublicPersona, createPersonaChat } from '../api/persona'
 import { authState } from '../api/auth'
 import AppNavbar from '../components/AppNavbar.vue'
 
@@ -260,6 +262,63 @@ function download() {
   window.open(`/api/skills/${skill.value.id}/download`, '_blank')
 }
 
+// 与技能创建者聊天：选择「实时在线」或「与虚拟的 TA 聊」（复用 /chat 与 /persona-chat）
+const chatDialog = ref(false)
+const chatting = ref(false)
+const ownerId = ref(0)
+const ownerPersona = ref({ chat_enabled: 0 })
+const allowOwnerView = ref(false)
+
+async function chatWithOwner() {
+  if (!authState.token) {
+    ElMessage.warning('请先登录')
+    router.push({ path: '/login', query: { redirect: route.fullPath } })
+    return
+  }
+  ownerId.value = Number(skill.value?.owner_id)
+  if (!ownerId.value) {
+    ElMessage.info('这个技能暂无作者，无法发起聊天')
+    return
+  }
+  if (ownerId.value === authState.user?.id) {
+    ElMessage.info('这是你自己发布的技能')
+    return
+  }
+  allowOwnerView.value = false
+  ownerPersona.value = { chat_enabled: 0 }
+  chatDialog.value = true
+  // 后台拉取对方虚拟自己状态（失败不影响实时聊天入口）
+  getPublicPersona(ownerId.value)
+    .then((p) => { ownerPersona.value = p || { chat_enabled: 0 } })
+    .catch(() => { /* ignore */ })
+}
+
+async function startRealChat() {
+  chatting.value = true
+  try {
+    const res = await createDirectChat(ownerId.value)
+    chatDialog.value = false
+    router.push({ path: `/chat/${res.chat_id}`, query: { name: skill.value.owner } })
+  } catch (e) {
+    ElMessage.error(e.message || '发起聊天失败')
+  } finally {
+    chatting.value = false
+  }
+}
+
+async function startPersonaChat() {
+  chatting.value = true
+  try {
+    const res = await createPersonaChat(ownerId.value, allowOwnerView.value)
+    chatDialog.value = false
+    router.push({ path: `/persona-chat/${res.chat_id}`, query: { name: skill.value.owner } })
+  } catch (e) {
+    ElMessage.error(e.message || '开始聊天失败')
+  } finally {
+    chatting.value = false
+  }
+}
+
 function goBack() {
   router.back()
 }
@@ -332,11 +391,47 @@ function goBack() {
               <el-icon style="margin-right: 4px"><Download /></el-icon>
               下载 Skill 包
             </el-button>
+            <el-button size="large" round :loading="chatting" @click="chatWithOwner">
+              <el-icon style="margin-right: 4px"><ChatDotRound /></el-icon>
+              和创建者聊聊
+            </el-button>
             <span class="owner-info">
               发布者：{{ skill.owner }} · {{ createdText }}
             </span>
           </div>
         </section>
+
+        <!-- 选择聊天方式：实时在线 或 与虚拟的 TA 聊 -->
+        <el-dialog v-model="chatDialog" :title="`和 ${skill.owner} 聊聊`" width="460px">
+          <div class="chat-options">
+            <div class="chat-option" :class="{ disabled: chatting }" @click="startRealChat">
+              <div class="chat-option-icon"><el-icon size="22"><ChatDotRound /></el-icon></div>
+              <div class="chat-option-body">
+                <div class="chat-option-title">实时在线聊天</div>
+                <div class="chat-option-desc">TA 本人实时回复（TA 在线时）</div>
+              </div>
+              <el-icon v-if="chatting" class="is-loading" style="color:#909399"><Loading /></el-icon>
+            </div>
+
+            <template v-if="ownerPersona.chat_enabled">
+              <div class="chat-option" :class="{ disabled: chatting }" @click="startPersonaChat">
+                <div class="chat-option-icon chat-option-icon-virtual"><el-icon size="22"><MagicStick /></el-icon></div>
+                <div class="chat-option-body">
+                  <div class="chat-option-title">与虚拟的 TA 聊天</div>
+                  <div class="chat-option-desc">由 TA 的「虚拟自己」回复，随时可聊</div>
+                </div>
+              </div>
+              <el-checkbox v-model="allowOwnerView" class="chat-allow-box">
+                允许 TA 查看本次虚拟聊天记录
+              </el-checkbox>
+              <p class="chat-allow-hint">不勾选则只有你能看到这段对话。</p>
+            </template>
+            <p v-else class="chat-persona-off">TA 还没开启「虚拟自己」，目前只能实时在线聊天。</p>
+          </div>
+          <template #footer>
+            <el-button @click="chatDialog = false">取消</el-button>
+          </template>
+        </el-dialog>
 
         <!-- AI 个性化解读 -->
         <section class="card ai-card">
@@ -634,6 +729,73 @@ function goBack() {
 
 .owner-info {
   font-size: 13px;
+  color: #909399;
+}
+
+/* 聊天方式选择弹窗 */
+.chat-options {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.chat-option {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid #e4e7ed;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+.chat-option:hover {
+  border-color: #409eff;
+  box-shadow: 0 2px 10px rgba(64, 158, 255, 0.12);
+}
+.chat-option.disabled {
+  opacity: 0.6;
+  pointer-events: none;
+}
+.chat-option-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  border-radius: 10px;
+  color: #409eff;
+  background: #ecf5ff;
+}
+.chat-option-icon-virtual {
+  color: #67c23a;
+  background: #f0f9eb;
+}
+.chat-option-body {
+  flex: 1;
+  min-width: 0;
+}
+.chat-option-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #303133;
+}
+.chat-option-desc {
+  font-size: 12px;
+  color: #909399;
+  margin-top: 2px;
+}
+.chat-allow-box {
+  margin: 2px 4px 0;
+}
+.chat-allow-hint {
+  margin: 4px 4px 0;
+  font-size: 12px;
+  color: #c0c4cc;
+}
+.chat-persona-off {
+  margin: 4px 4px 0;
+  font-size: 12px;
   color: #909399;
 }
 

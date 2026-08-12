@@ -2,6 +2,7 @@ package main
 
 import (
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -44,7 +45,7 @@ func submitReview(c *gin.Context) {
 	uid := c.GetInt64("userID")
 
 	var s Skill
-	err := db.QueryRow(`SELECT id FROM skills WHERE id = ?`, id).Scan(&s.ID)
+	err := db.QueryRow(`SELECT id, owner_id, name FROM skills WHERE id = ?`, id).Scan(&s.ID, &s.OwnerID, &s.Name)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "skill not found"})
 		return
@@ -80,6 +81,17 @@ func submitReview(c *gin.Context) {
 		rating = COALESCE((SELECT AVG(rating) FROM skill_reviews WHERE skill_id = ?), 0),
 		rating_count = (SELECT COUNT(*) FROM skill_reviews WHERE skill_id = ?)
 		WHERE id = ?`, id, id, id)
+
+	// 通知 skill 属主：收到新评价
+	if s.OwnerID != nil {
+		if me, _ := getUserByID(uid); me != nil {
+			content := req.Comment
+			if content == "" {
+				content = "给你的 Skill 打出了 " + strconv.Itoa(req.Rating) + " 星"
+			}
+			pushNotification(*s.OwnerID, uid, "review", content, me.Username, s.Name, s.ID)
+		}
+	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "review submitted"})
 }
@@ -159,7 +171,7 @@ func createIssue(c *gin.Context) {
 	uid := c.GetInt64("userID")
 
 	var s Skill
-	if err := db.QueryRow(`SELECT id FROM skills WHERE id = ?`, id).Scan(&s.ID); err != nil {
+	if err := db.QueryRow(`SELECT id, owner_id, name FROM skills WHERE id = ?`, id).Scan(&s.ID, &s.OwnerID, &s.Name); err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "skill not found"})
 		return
 	}
@@ -181,6 +193,13 @@ func createIssue(c *gin.Context) {
 		return
 	}
 	issueID, _ := result.LastInsertId()
+
+	// 通知 skill 属主：收到新的改进意见（Issue）
+	if s.OwnerID != nil {
+		if me, _ := getUserByID(uid); me != nil {
+			pushNotification(*s.OwnerID, uid, "issue", req.Title, me.Username, s.Name, s.ID)
+		}
+	}
 
 	issue, err := getIssueByID(issueID)
 	if err != nil {

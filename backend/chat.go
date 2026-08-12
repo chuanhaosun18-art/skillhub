@@ -152,6 +152,16 @@ func sendDirectMessage(c *gin.Context) {
 	}
 	id, _ := res.LastInsertId()
 	db.Exec(`UPDATE direct_chats SET last_message_at = CURRENT_TIMESTAMP WHERE id = ?`, chatID)
+
+	// 通知接收方：有新私信
+	peerID := a
+	if peerID == uid {
+		peerID = b
+	}
+	if me, _ := getUserByID(uid); me != nil {
+		pushNotification(peerID, uid, "message", req.Content, me.Username, "", chatID)
+	}
+
 	c.JSON(http.StatusOK, gin.H{"message_id": id, "created_at": time.Now()})
 }
 
